@@ -1,19 +1,4 @@
-import Pricing from '@/components/ui/Pricing/Pricing';
-import { createClient } from '@/utils/supabase/server';
-import {
-  getProducts,
-  getSubscription,
-  getUser
-} from '@/utils/supabase/queries';
-
-export default async function PricingPage() {
-  const supabase = createClient();
-  const [user, products, subscription] = await Promise.all([
-    getUser(supabase),
-    getProducts(supabase),
-    getSubscription(supabase)
-  ]);
-
+export default async function HomePage() {
   return (
     <>
       {/* Hero Section */}
@@ -51,12 +36,59 @@ export default async function PricingPage() {
         </div>
       </section>
 
-      {/* Pricing Section */}
-      <Pricing
-        user={user}
-        products={products ?? []}
-        subscription={subscription}
-      />
+      {/* Features Section */}
+      <section className="bg-zinc-950 py-24">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl md:text-5xl font-bold text-white mb-4">
+              Özellikler
+            </h2>
+            <p className="text-xl text-zinc-400">
+              Emlak analizi için ihtiyacınız olan her şey
+            </p>
+          </div>
+          
+          <div className="grid md:grid-cols-3 gap-8">
+            <div className="bg-zinc-900 p-8 rounded-2xl border border-zinc-800">
+              <h3 className="text-2xl font-bold text-white mb-4">ParselENS</h3>
+              <p className="text-zinc-400">
+                Türkiye genelindeki tüm parselleri anında görüntüleyin ve analiz edin
+              </p>
+            </div>
+            
+            <div className="bg-zinc-900 p-8 rounded-2xl border border-zinc-800">
+              <h3 className="text-2xl font-bold text-white mb-4">Değerleme</h3>
+              <p className="text-zinc-400">
+                AI destekli değerleme sistemi ile gerçek zamanlı fiyat analizi
+              </p>
+            </div>
+            
+            <div className="bg-zinc-900 p-8 rounded-2xl border border-zinc-800">
+              <h3 className="text-2xl font-bold text-white mb-4">Karşılaştır</h3>
+              <p className="text-zinc-400">
+                İlleri ve bölgeleri karşılaştırarak en iyi yatırım fırsatlarını bulun
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Pricing Teaser */}
+      <section className="bg-black py-24">
+        <div className="max-w-4xl mx-auto px-6 text-center">
+          <h2 className="text-3xl md:text-5xl font-bold text-white mb-6">
+            Fiyatlandırma
+          </h2>
+          <p className="text-xl text-zinc-400 mb-8">
+            Yakında açıklanacak
+          </p>
+          <div className="bg-zinc-900 rounded-2xl p-8 border border-zinc-800">
+            <p className="text-zinc-300">
+              Abonelik paketlerimiz ve fiyatlandırma detayları çok yakında sizlerle!
+            </p>
+          </div>
+        </div>
+      </section>
     </>
   );
 }
