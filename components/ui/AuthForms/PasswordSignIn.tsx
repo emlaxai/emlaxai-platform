@@ -35,10 +35,10 @@ export default function PasswordSignIn({
       >
         <div className="grid gap-2">
           <div className="grid gap-1">
-            <label htmlFor="email">Email</label>
+            <label htmlFor="email">E-posta</label>
             <input
               id="email"
-              placeholder="name@example.com"
+              placeholder="isim@ornek.com"
               type="email"
               name="email"
               autoCapitalize="none"
@@ -46,10 +46,10 @@ export default function PasswordSignIn({
               autoCorrect="off"
               className="w-full p-3 rounded-md bg-zinc-800"
             />
-            <label htmlFor="password">Password</label>
+            <label htmlFor="password">Şifre</label>
             <input
               id="password"
-              placeholder="Password"
+              placeholder="Şifreniz"
               type="password"
               name="password"
               autoComplete="current-password"
@@ -62,25 +62,25 @@ export default function PasswordSignIn({
             className="mt-1"
             loading={isSubmitting}
           >
-            Sign in
+            Giriş Yap
           </Button>
         </div>
       </form>
       <p>
         <Link href="/signin/forgot_password" className="font-light text-sm">
-          Forgot your password?
+          Şifrenizi mi unuttunuz?
         </Link>
       </p>
       {allowEmail && (
         <p>
           <Link href="/signin/email_signin" className="font-light text-sm">
-            Sign in via magic link
+            Sihirli link ile giriş yapın
           </Link>
         </p>
       )}
       <p>
         <Link href="/signin/signup" className="font-light text-sm">
-          Don't have an account? Sign up
+          Hesabınız yok mu? Kayıt olun
         </Link>
       </p>
     </div>

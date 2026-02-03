@@ -1,110 +1,103 @@
 import Link from 'next/link';
-
-import Logo from '@/components/icons/Logo';
-import GitHub from '@/components/icons/GitHub';
+import Image from 'next/image';
 
 export default function Footer() {
   return (
-    <footer className="mx-auto max-w-[1920px] px-6 bg-zinc-900">
-      <div className="grid grid-cols-1 gap-8 py-12 text-white transition-colors duration-150 border-b lg:grid-cols-12 border-zinc-600 bg-zinc-900">
-        <div className="col-span-1 lg:col-span-2">
-          <Link
-            href="/"
-            className="flex items-center flex-initial font-bold md:mr-24"
-          >
-            <span className="mr-2 border rounded-full border-zinc-700">
-              <Logo />
-            </span>
-            <span>ACME</span>
-          </Link>
-        </div>
-        <div className="col-span-1 lg:col-span-2">
-          <ul className="flex flex-col flex-initial md:flex-1">
-            <li className="py-3 md:py-0 md:pb-4">
-              <Link
-                href="/"
-                className="text-white transition duration-150 ease-in-out hover:text-zinc-200"
+    <footer className="border-t border-zinc-800 bg-black">
+      <div className="mx-auto max-w-7xl px-6">
+        {/* Main Footer Content */}
+        <div className="flex flex-col md:flex-row items-start justify-between py-12 gap-12">
+          {/* Logo Icon - Sol Tarafta, Biraz Yukarıda */}
+          <div className="flex-shrink-0 md:-mt-4">
+            <Link href="/" className="inline-block">
+              <Image 
+                src="/emlaxai-icon.svg" 
+                alt="EmlaXAI" 
+                width={48} 
+                height={48}
+                className="hover:opacity-80 transition-opacity brightness-0 invert"
+                style={{ filter: 'brightness(0) invert(1)' }}
+              />
+            </Link>
+          </div>
+
+          {/* Navigation Columns - Merkezde */}
+          <div className="flex flex-wrap justify-center gap-x-24 gap-y-8 flex-1">
+            {/* Ürünler */}
+            <div className="flex flex-col gap-3">
+              <h3 className="text-xs font-semibold text-white mb-2 tracking-wider">ÜRÜNLER</h3>
+              <Link 
+                href="/parselens" 
+                className="text-sm text-zinc-400 hover:text-white transition-colors"
               >
-                Home
+                Parselens
               </Link>
-            </li>
-            <li className="py-3 md:py-0 md:pb-4">
-              <Link
-                href="/"
-                className="text-white transition duration-150 ease-in-out hover:text-zinc-200"
+              <Link 
+                href="/pricing" 
+                className="text-sm text-zinc-400 hover:text-white transition-colors"
               >
-                About
+                Fiyatlandırma
               </Link>
-            </li>
-            <li className="py-3 md:py-0 md:pb-4">
-              <Link
-                href="/"
-                className="text-white transition duration-150 ease-in-out hover:text-zinc-200"
+            </div>
+
+            {/* Kurumsal */}
+            <div className="flex flex-col gap-3">
+              <h3 className="text-xs font-semibold text-white mb-2 tracking-wider">KURUMSAL</h3>
+              <Link 
+                href="/hakkimizda" 
+                className="text-sm text-zinc-400 hover:text-white transition-colors"
               >
-                Careers
+                Hakkımızda
               </Link>
-            </li>
-            <li className="py-3 md:py-0 md:pb-4">
-              <Link
-                href="/"
-                className="text-white transition duration-150 ease-in-out hover:text-zinc-200"
+              <Link 
+                href="/nasil-calisir" 
+                className="text-sm text-zinc-400 hover:text-white transition-colors"
               >
-                Blog
+                Nasıl Çalışır?
               </Link>
-            </li>
-          </ul>
-        </div>
-        <div className="col-span-1 lg:col-span-2">
-          <ul className="flex flex-col flex-initial md:flex-1">
-            <li className="py-3 md:py-0 md:pb-4">
-              <p className="font-bold text-white transition duration-150 ease-in-out hover:text-zinc-200">
-                LEGAL
-              </p>
-            </li>
-            <li className="py-3 md:py-0 md:pb-4">
-              <Link
-                href="/"
-                className="text-white transition duration-150 ease-in-out hover:text-zinc-200"
+            </div>
+
+            {/* Yasal */}
+            <div className="flex flex-col gap-3">
+              <h3 className="text-xs font-semibold text-white mb-2 tracking-wider">YASAL</h3>
+              <Link 
+                href="/gizlilik-politikasi" 
+                className="text-sm text-zinc-400 hover:text-white transition-colors"
               >
-                Privacy Policy
+                Gizlilik Politikası
               </Link>
-            </li>
-            <li className="py-3 md:py-0 md:pb-4">
-              <Link
-                href="/"
-                className="text-white transition duration-150 ease-in-out hover:text-zinc-200"
+              <Link 
+                href="/kullanim-sartlari" 
+                className="text-sm text-zinc-400 hover:text-white transition-colors"
               >
-                Terms of Use
+                Kullanım Şartları
               </Link>
-            </li>
-          </ul>
-        </div>
-        <div className="flex items-start col-span-1 text-white lg:col-span-6 lg:justify-end">
-          <div className="flex items-center h-10 space-x-6">
-            <a
-              aria-label="Github Repository"
-              href="https://github.com/vercel/nextjs-subscription-payments"
-            >
-              <GitHub />
-            </a>
+            </div>
+
+            {/* İletişim */}
+            <div className="flex flex-col gap-3">
+              <h3 className="text-xs font-semibold text-white mb-2 tracking-wider">İLETİŞİM</h3>
+              <a 
+                href="mailto:ai@emlaxai.com" 
+                className="text-sm text-zinc-400 hover:text-white transition-colors"
+              >
+                ai@emlaxai.com
+              </a>
+              <a 
+                href="mailto:destek@emlaxai.com" 
+                className="text-sm text-zinc-400 hover:text-white transition-colors"
+              >
+                destek@emlaxai.com
+              </a>
+            </div>
           </div>
         </div>
-      </div>
-      <div className="flex flex-col items-center justify-between py-12 space-y-4 md:flex-row bg-zinc-900">
-        <div>
-          <span>
-            &copy; {new Date().getFullYear()} ACME, Inc. All rights reserved.
-          </span>
-        </div>
-        <div className="flex items-center">
-          <span className="text-white">Crafted by</span>
-          <a href="https://vercel.com" aria-label="Vercel.com Link">
-            <img
-              src="/vercel.svg"
-              alt="Vercel.com Logo"
-              className="inline-block h-6 ml-4 text-white"
-            />
-          </a>
+
+        {/* Bottom Bar */}
+        <div className="border-t border-zinc-800 py-6">
+          <p className="text-center text-sm text-zinc-500">
+            &copy; {new Date().getFullYear()} EmlaXAI. Tüm hakları saklıdır.
+          </p>
         </div>
       </div>
     </footer>

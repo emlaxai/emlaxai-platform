@@ -63,12 +63,12 @@ export default async function SignIn({
         <Card
           title={
             viewProp === 'forgot_password'
-              ? 'Reset Password'
+              ? 'Şifre Sıfırla'
               : viewProp === 'update_password'
-                ? 'Update Password'
+                ? 'Şifre Güncelle'
                 : viewProp === 'signup'
-                  ? 'Sign Up'
-                  : 'Sign In'
+                  ? 'Kayıt Ol'
+                  : 'Giriş Yap'
           }
         >
           {viewProp === 'password_signin' && (
@@ -101,7 +101,7 @@ export default async function SignIn({
             viewProp !== 'signup' &&
             allowOauth && (
               <>
-                <Separator text="Third-party sign-in" />
+                <Separator text="Diğer yöntemler" />
                 <OauthSignIn />
               </>
             )}

@@ -1,54 +1,69 @@
 export default function LogoCloud() {
   return (
-    <div>
-      <p className="mt-24 text-xs uppercase text-zinc-400 text-center font-bold tracking-[0.3em]">
-        Brought to you by
+    <div className="mt-32 mb-16">
+      <p className="text-[10px] uppercase text-zinc-600 text-center font-semibold tracking-[0.4em] mb-8">
+        Veri ve Teknoloji Ortaklarımız
       </p>
-      <div className="grid grid-cols-1 place-items-center	my-12 space-y-4 sm:mt-8 sm:space-y-0 md:mx-auto md:max-w-2xl sm:grid sm:gap-6 sm:grid-cols-5">
-        <div className="flex items-center justify-start h-12">
-          <a href="https://nextjs.org" aria-label="Next.js Link">
-            <img
-              src="/nextjs.svg"
-              alt="Next.js Logo"
-              className="h-6 sm:h-12 text-white"
-            />
-          </a>
+      
+      {/* Tek Satır Minimalist Logo Bandı */}
+      <div className="flex items-center justify-center gap-12 flex-wrap max-w-5xl mx-auto px-8">
+        {/* Google Cloud */}
+        <div className="flex items-center justify-center grayscale opacity-40 hover:opacity-60 transition-opacity duration-300">
+          <img
+            src="https://www.gstatic.com/images/branding/product/2x/google_cloud_512dp.png"
+            alt="Google Cloud"
+            className="h-7 object-contain"
+          />
         </div>
-        <div className="flex items-center justify-start h-12">
-          <a href="https://vercel.com" aria-label="Vercel.com Link">
-            <img
-              src="/vercel.svg"
-              alt="Vercel.com Logo"
-              className="h-6 text-white"
-            />
-          </a>
+        
+        {/* OpenAI */}
+        <div className="flex items-center justify-center grayscale opacity-40 hover:opacity-60 transition-opacity duration-300">
+          <img
+            src="https://upload.wikimedia.org/wikipedia/commons/4/4d/OpenAI_Logo.svg"
+            alt="OpenAI"
+            className="h-5 object-contain"
+          />
         </div>
-        <div className="flex items-center justify-start h-12">
-          <a href="https://stripe.com" aria-label="stripe.com Link">
-            <img
-              src="/stripe.svg"
-              alt="stripe.com Logo"
-              className="h-12 text-white"
-            />
-          </a>
+        
+        {/* Anthropic */}
+        <div className="flex items-center justify-center grayscale opacity-40 hover:opacity-60 transition-opacity duration-300">
+          <img
+            src="https://upload.wikimedia.org/wikipedia/commons/7/78/Anthropic_logo.svg"
+            alt="Anthropic"
+            className="h-5 object-contain"
+          />
         </div>
-        <div className="flex items-center justify-start h-12">
-          <a href="https://supabase.io" aria-label="supabase.io Link">
-            <img
-              src="/supabase.svg"
-              alt="supabase.io Logo"
-              className="h-10 text-white"
-            />
-          </a>
+        
+        {/* Cloudflare */}
+        <div className="flex items-center justify-center grayscale opacity-40 hover:opacity-60 transition-opacity duration-300">
+          <img
+            src="https://www.cloudflare.com/img/logo-web-badges/cf-logo-on-white-bg.svg"
+            alt="Cloudflare"
+            className="h-6 object-contain"
+          />
         </div>
-        <div className="flex items-center justify-start h-12">
-          <a href="https://github.com" aria-label="github.com Link">
-            <img
-              src="/github.svg"
-              alt="github.com Logo"
-              className="h-8 text-white"
-            />
-          </a>
+        
+        {/* Divider */}
+        <div className="h-6 w-px bg-zinc-800"></div>
+        
+        {/* TÜİK */}
+        <div className="flex items-center justify-center opacity-40 hover:opacity-60 transition-opacity duration-300">
+          <span className="text-zinc-500 text-xs font-semibold tracking-wider">TÜİK</span>
+        </div>
+        
+        {/* TKGM */}
+        <div className="flex items-center justify-center opacity-40 hover:opacity-60 transition-opacity duration-300">
+          <span className="text-zinc-500 text-xs font-semibold tracking-wider">TKGM</span>
+        </div>
+        
+        {/* Çevre Bakanlığı */}
+        <div className="flex items-center justify-center opacity-40 hover:opacity-60 transition-opacity duration-300">
+          <span className="text-zinc-500 text-xs font-semibold tracking-wider">ÇŞİDB</span>
+        </div>
+        
+        {/* Sanayi Bakanlığı */}
+        <div className="flex items-center justify-center opacity-40 hover:opacity-60 transition-opacity duration-300">
+          <span className="text-zinc-500 text-xs font-semibold tracking-wider">SanTek</span>
         </div>
       </div>
     </div>
