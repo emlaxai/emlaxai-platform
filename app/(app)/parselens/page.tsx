@@ -1,13 +1,16 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useSidebar } from '@/contexts/SidebarContext';
+import { useExaChat } from '@/contexts/ExaChatContext';
 import dynamic from 'next/dynamic';
+import Image from 'next/image';
 import BottomDrawer from '@/components/BottomDrawer/BottomDrawer';
 import MobileSidebar from '@/components/MobileSidebar/MobileSidebar';
-import FilterPopup from '@/components/FilterPopup/FilterPopup';
+import FilterPopup, { type FilterValues } from '@/components/FilterPopup/FilterPopup';
 import Tracker from '@/components/Tracker/Tracker';
-import { getEconomicData, getIlFiyatlari, getIlTrend, formatNumber, formatChange, getChangeColor, getRiskColor, getRiskGradient, type EconomicData, type IlFiyatlari } from '@/lib/api';
+import { getEconomicData, getIlFiyatlari, getIlceFiyatlari, getIlTrend, getTurkiyeTrend, formatNumber, formatChange, getChangeColor, getRiskColor, getRiskGradient, type EconomicData, type IlFiyatlari, type IlceFiyatlari, type IlTrend, type TurkiyeTrend } from '@/lib/api';
+import ExaMarkdown from '@/components/ExaMarkdown/ExaMarkdown';
 
 // Dynamically import ECharts to prevent SSR issues
 const ReactECharts = dynamic(() => import('echarts-for-react'), { ssr: false });
@@ -37,6 +40,489 @@ const GeoJSON = dynamic(
   () => import('react-leaflet').then((mod) => mod.GeoJSON),
   { ssr: false }
 );
+// İmar Parselleri - Viewport-based GeoJSON yükleyici + İmar Baskısı Analizi
+const ImarParcelsLayer = dynamic(
+  () => Promise.resolve(function ImarParcelsLayerInner({ il, active, onParcelClick }: { il: string; active: boolean; onParcelClick?: (id: string) => void }) {
+    const { useMap, useMapEvents } = require('react-leaflet');
+    const { useState: uS, useEffect: uE, useRef: uR, useCallback: uCB } = require('react');
+    const L = require('leaflet');
+    const map = useMap();
+    const layerRef = (uR as any)(null);
+    const abortRef = (uR as any)(null);
+    const lastBboxRef = (uR as any)('');
+    const cacheRef = (uR as any)(new Map());
+    const [loading, setLoading] = uS(false);
+
+    // İmar baskısı renk skalası (TARLA/HAM TOPRAK için)
+    const getImarBaskisiColor = (score: number): string => {
+      if (score <= 0) return '#22c55e';       // Yeşil - baskı yok
+      if (score <= 15) return '#84cc16';      // Açık yeşil - çok düşük
+      if (score <= 30) return '#eab308';      // Sarı - düşük
+      if (score <= 50) return '#f59e0b';      // Turuncu - orta
+      if (score <= 75) return '#f97316';      // Koyu turuncu - yüksek
+      return '#ef4444';                        // Kırmızı - çok yüksek baskı
+    };
+
+    const getImarBaskisiOpacity = (score: number): number => {
+      if (score <= 0) return 0.2;
+      if (score <= 15) return 0.3;
+      if (score <= 30) return 0.4;
+      if (score <= 50) return 0.5;
+      if (score <= 75) return 0.6;
+      return 0.7;
+    };
+
+    // Kategori bazlı renk (urban parseller için)
+    const getUrbanColor = (kategori: string) => {
+      const colors: Record<string, string> = {
+        'Arsa': '#3b82f6',
+        'Konut': '#6366f1',
+        'Ticari': '#8b5cf6',
+        'Orman': '#065f46',
+        'Yol': '#475569',
+        'Diger': '#64748b',
+      };
+      return colors[kategori] || '#64748b';
+    };
+
+    // Baskı seviyesi metni
+    const getBaskiLabel = (score: number): string => {
+      if (score <= 0) return 'Baskı yok';
+      if (score <= 15) return 'Çok düşük baskı';
+      if (score <= 30) return 'Düşük baskı';
+      if (score <= 50) return 'Orta baskı';
+      if (score <= 75) return 'Yüksek baskı';
+      return 'Çok yüksek baskı';
+    };
+
+    const fetchParcels = uCB(async () => {
+      if (!active || !il) return;
+      
+      const zoom = map.getZoom();
+      if (zoom < 14) {
+        if (layerRef.current) {
+          layerRef.current.clearLayers();
+        }
+        return;
+      }
+
+      const bounds = map.getBounds();
+      const bbox = `${bounds.getWest().toFixed(5)},${bounds.getSouth().toFixed(5)},${bounds.getEast().toFixed(5)},${bounds.getNorth().toFixed(5)}`;
+      
+      if (bbox === lastBboxRef.current) return;
+      lastBboxRef.current = bbox;
+      
+      const cacheKey = `${il}-${bbox}-${zoom}`;
+      if (cacheRef.current.has(cacheKey)) {
+        const cached = cacheRef.current.get(cacheKey);
+        renderGeoJSON(cached);
+        return;
+      }
+      
+      if (abortRef.current) abortRef.current.abort();
+      abortRef.current = new AbortController();
+      
+      setLoading(true);
+      
+      try {
+        const res = await fetch(
+          `/api/imar-wms?il=${encodeURIComponent(il)}&bbox=${encodeURIComponent(bbox)}&zoom=${zoom}&limit=8000&imar_mode=true`,
+          { signal: abortRef.current.signal }
+        );
+        
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        
+        const data = await res.json();
+        
+        if (data.features && data.features.length > 0) {
+          if (cacheRef.current.size > 20) {
+            const firstKey = cacheRef.current.keys().next().value;
+            cacheRef.current.delete(firstKey);
+          }
+          cacheRef.current.set(cacheKey, data);
+          renderGeoJSON(data);
+        } else {
+          if (layerRef.current) layerRef.current.clearLayers();
+        }
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') {
+          console.error('Parsel yükleme hatası:', err);
+        }
+      } finally {
+        setLoading(false);
+      }
+    }, [active, il, map]);
+
+    const renderGeoJSON = uCB((data: any) => {
+      if (!layerRef.current) {
+        layerRef.current = L.geoJSON(null, {
+          style: (feature: any) => {
+            const p = feature?.properties;
+            const kategori = p?.kategori || 'Diger';
+            const imarScore = p?.imar_baskisi ?? -1;
+            const isTarim = kategori === 'Tarim' || kategori === 'HamToprak';
+
+            if (isTarim) {
+              // TARLA/HAM TOPRAK → imar baskısı renk skalası
+              return {
+                color: imarScore > 30 ? 'rgba(239,68,68,0.8)' : 'rgba(255,255,255,0.4)',
+                weight: imarScore > 30 ? 1.5 : 0.6,
+                fillColor: getImarBaskisiColor(imarScore),
+                fillOpacity: getImarBaskisiOpacity(imarScore),
+              };
+            } else {
+              // Urban parseller → soluk mavi/gri
+              return {
+                color: 'rgba(255,255,255,0.25)',
+                weight: 0.5,
+                fillColor: getUrbanColor(kategori),
+                fillOpacity: 0.15,
+              };
+            }
+          },
+          onEachFeature: (feature: any, layer: any) => {
+            const p = feature.properties;
+            if (!p) return;
+            
+            const isTarim = p.kategori === 'Tarim' || p.kategori === 'HamToprak';
+            const imarScore = p.imar_baskisi ?? -1;
+            const baskiColor = isTarim ? getImarBaskisiColor(imarScore) : '';
+            
+            const baskiHtml = isTarim 
+              ? `<div style="margin-top:4px;padding:3px 8px;border-radius:4px;background:${baskiColor}20;border:1px solid ${baskiColor}40;display:inline-block">
+                  <span style="font-size:10px;font-weight:700;color:${baskiColor}">${getBaskiLabel(imarScore)}</span>
+                  <span style="font-size:9px;color:rgba(255,255,255,0.4);margin-left:4px">(skor: ${imarScore})</span>
+                </div>`
+              : '';
+            
+            layer.bindTooltip(
+              `<div style="padding:6px 10px;white-space:nowrap">
+                <div style="font-size:12px;font-weight:600;color:#fff">${p.ada || '-'}/${p.parsel || '-'}</div>
+                <div style="font-size:10px;color:rgba(255,255,255,0.6);margin-top:2px">${p.mahalle || ''} • ${p.cins || ''}</div>
+                <div style="font-size:10px;color:rgba(255,255,255,0.5);margin-top:1px">${p.alan ? Math.round(p.alan).toLocaleString('tr-TR') + ' m²' : ''}</div>
+                ${baskiHtml}
+              </div>`,
+              {
+                className: 'dark-tooltip',
+                sticky: true,
+                direction: 'top',
+                offset: [0, -5],
+                opacity: 1,
+              }
+            );
+
+            // Parsel tıklama → detay panelini aç
+            layer.on('click', () => {
+              if (onParcelClick && p.id) {
+                onParcelClick(p.id);
+                // Tıklanan parseli vurgula
+                layer.setStyle({
+                  color: '#3b82f6',
+                  weight: 3,
+                  fillOpacity: 0.7,
+                });
+              }
+            });
+          },
+        }).addTo(map);
+      }
+      
+      layerRef.current.clearLayers();
+      layerRef.current.addData(data);
+    }, [map]);
+
+    useMapEvents({
+      moveend: () => { setTimeout(fetchParcels, 300); },
+      zoomend: () => { setTimeout(fetchParcels, 300); },
+    });
+
+    uE(() => {
+      if (active && il) {
+        fetchParcels();
+      }
+      return () => {
+        if (layerRef.current) {
+          map.removeLayer(layerRef.current);
+          layerRef.current = null;
+        }
+        if (abortRef.current) {
+          abortRef.current.abort();
+        }
+      };
+    }, [active, il]);
+
+    uE(() => {
+      if (!active && layerRef.current) {
+        map.removeLayer(layerRef.current);
+        layerRef.current = null;
+        lastBboxRef.current = '';
+      }
+    }, [active]);
+
+    return null;
+  }),
+  { ssr: false }
+);
+
+// TKGM Tapu İşlem Hacmi Heatmap Katmanı
+const TapuHeatmapLayer = dynamic(
+  () => Promise.resolve(function TapuHeatmapLayerInner({ il, active }: { il: string; active: boolean }) {
+    const { useMap, useMapEvents } = require('react-leaflet');
+    const { useState: uS, useEffect: uE, useRef: uR } = require('react');
+    const L = require('leaflet');
+    require('leaflet.heat');
+    const map = useMap();
+    const heatRef = (uR as any)(null);
+    const abortRef = (uR as any)(null);
+    const lastKeyRef = (uR as any)('');
+    const [stats, setStats] = (uS as any)(null);
+
+    const fetchHeatmap = () => {
+      if (!active) return;
+      const bounds = map.getBounds();
+      const zoom = map.getZoom();
+      const bbox = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+      const key = `${il}-${bbox}-${zoom}`;
+      if (key === lastKeyRef.current) return;
+      lastKeyRef.current = key;
+
+      if (abortRef.current) abortRef.current.abort();
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+
+      const params = new URLSearchParams({ zoom: String(zoom), bbox, limit: '8000' });
+      if (il) params.set('il', il);
+
+      fetch(`/api/heatmap?${params.toString()}`, { signal: ctrl.signal })
+        .then(r => r.json())
+        .then(data => {
+          if (!data.points || !data.points.length) return;
+          setStats(data.stats);
+
+          // Mevcut heatmap'i kaldır
+          if (heatRef.current) {
+            map.removeLayer(heatRef.current);
+            heatRef.current = null;
+          }
+
+          // Yoğunluk değerlerini normalize et
+          const maxVal = Math.max(...data.points.map((p: number[]) => p[2]));
+          const points = data.points.map((p: number[]) => [p[0], p[1], p[2] / maxVal]);
+
+          // @ts-ignore - leaflet.heat
+          const heat = (L as any).heatLayer(points, {
+            radius: zoom <= 8 ? 8 : zoom <= 10 ? 12 : zoom <= 12 ? 18 : 25,
+            blur: zoom <= 8 ? 12 : zoom <= 10 ? 15 : 20,
+            maxZoom: 17,
+            max: 1.0,
+            minOpacity: 0.25,
+            gradient: {
+              0.0: '#00000000',
+              0.15: '#0d47a1',
+              0.3: '#1565c0',
+              0.45: '#1e88e5',
+              0.55: '#43a047',
+              0.65: '#fdd835',
+              0.75: '#ff8f00',
+              0.85: '#f4511e',
+              0.95: '#d50000',
+              1.0: '#b71c1c',
+            },
+          });
+
+          heat.addTo(map);
+          heatRef.current = heat;
+        })
+        .catch(() => {});
+    };
+
+    useMapEvents({
+      moveend: fetchHeatmap,
+      zoomend: fetchHeatmap,
+    });
+
+    uE(() => {
+      if (active) {
+        fetchHeatmap();
+      } else {
+        if (heatRef.current) {
+          map.removeLayer(heatRef.current);
+          heatRef.current = null;
+        }
+        lastKeyRef.current = '';
+        setStats(null);
+      }
+    }, [active, il]);
+
+    uE(() => {
+      return () => {
+        if (heatRef.current) {
+          map.removeLayer(heatRef.current);
+          heatRef.current = null;
+        }
+        if (abortRef.current) abortRef.current.abort();
+      };
+    }, []);
+
+    return null;
+  }),
+  { ssr: false }
+);
+
+// Harita instance'ını dışarıya aktarmak için yardımcı
+let _setMapRef: ((map: any) => void) | null = null;
+const MapRefSetter = dynamic(
+  () => Promise.resolve(function MapRefSetterInner() {
+    const { useMap } = require('react-leaflet');
+    const { useEffect: useEff } = require('react');
+    const map = useMap();
+    useEff(() => {
+      if (_setMapRef) _setMapRef(map);
+    }, [map]);
+    return null;
+  }),
+  { ssr: false }
+);
+
+// Harita boyutunu doğru hesaplamak için invalidateSize tetikleyici
+const MapResizer = dynamic(
+  () => Promise.resolve(function MapResizerInner() {
+    const { useMap } = require('react-leaflet');
+    const { useEffect: useEff, useRef: useR } = require('react');
+    const map = useMap();
+    const containerRef = (useR as any)(null);
+    useEff(() => {
+      // Birden fazla zamanlayıcı ile invalidateSize
+      const timers = [50, 150, 300, 600, 1000, 2000].map(ms =>
+        setTimeout(() => map.invalidateSize(), ms)
+      );
+      // ResizeObserver ile container boyut değişikliklerini izle
+      const container = map.getContainer();
+      let ro: ResizeObserver | null = null;
+      if (container && typeof ResizeObserver !== 'undefined') {
+        ro = new ResizeObserver(() => {
+          map.invalidateSize();
+        });
+        ro.observe(container);
+        // Parent'ı da izle
+        if (container.parentElement) {
+          ro.observe(container.parentElement);
+        }
+      }
+      return () => {
+        timers.forEach(t => clearTimeout(t));
+        ro?.disconnect();
+      };
+    }, [map]);
+    return null;
+  }),
+  { ssr: false }
+);
+
+// ========================================================================
+// GeoJSON NAME_1 → DB il ismi eşleştirme
+// ========================================================================
+const GEOJSON_TO_DB_NAME: Record<string, string> = {
+  'Afyon': 'Afyonkarahisar',
+  'Istanbul': 'İstanbul',
+  'Izmir': 'İzmir',
+  'K.Maras': 'Kahramanmaras',
+  'Kinkkale': 'Kirikkale',
+  'Zinguldak': 'Zonguldak',
+  'Bartın': 'Bartin',
+  'Bingöl': 'Bingol',
+  'Düzce': 'Duzce',
+  'Elazığ': 'Elazig',
+  'Gümüshane': 'Gumushane',
+  'Iğdır': 'Igdir',
+  'Karabük': 'Karabuk',
+  'Kütahya': 'Kutahya',
+  'Çanakkale': 'Canakkale',
+  'Çankiri': 'Cankiri',
+  'Çorum': 'Corum',
+};
+
+function geoNameToDbName(geoName: string): string {
+  return GEOJSON_TO_DB_NAME[geoName] || geoName;
+}
+
+// ========================================================================
+// Parsel Detay Tipi (İmar Baskısı click)
+// ========================================================================
+interface ParselDetail {
+  parsel: {
+    tapu_kimlik_no: string;
+    il: string;
+    ilce: string;
+    mahalle: string;
+    ada: string;
+    parsel: string;
+    pafta: string | null;
+    cins: string;
+    kategori: string;
+    alan: number;
+    gercek_alan_m2: number;
+    lat: number;
+    lng: number;
+  };
+  imar_baskisi: {
+    skor: number;
+    base_skor?: number;
+    tapu_bonus?: number;
+    seviye: string;
+    aciklama: string;
+  };
+  tapu_islem?: {
+    parsel_islem: number;
+    cevre_ort: number;
+    cevre_max: number;
+    cevre_toplam?: number;
+    cevre_parsel: number;
+  };
+  mesafeler: {
+    yol: number | null;
+    arsa: number | null;
+    konut: number | null;
+    ticari: number | null;
+  };
+  bolge_dagilim: Array<{ kategori: string; sayi: number; ort_alan: number }>;
+  poi_mesafeler: {
+    okul: { name: string; distance_m: number } | null;
+    hastane: { name: string; distance_m: number } | null;
+    avm: { name: string; distance_m: number } | null;
+    otobus: { name: string; distance_m: number } | null;
+    sanayi: { name: string; distance_m: number } | null;
+    havalimani: { name: string; distance_m: number } | null;
+  };
+}
+
+// ========================================================================
+// Fiyat → Renk interpolasyon
+// ========================================================================
+const PRICE_GRADIENT_COLORS = [
+  { r: 16, g: 185, b: 129 },   // #10b981 - yeşil (en ucuz)
+  { r: 34, g: 197, b: 94 },    // #22c55e
+  { r: 132, g: 204, b: 22 },   // #84cc16
+  { r: 234, g: 179, b: 8 },    // #eab308
+  { r: 245, g: 158, b: 11 },   // #f59e0b
+  { r: 249, g: 115, b: 22 },   // #f97316
+  { r: 239, g: 68, b: 68 },    // #ef4444
+  { r: 220, g: 38, b: 38 },    // #dc2626 - kırmızı (en pahalı)
+];
+
+function getPriceColor(price: number, min: number, max: number): string {
+  if (max <= min) return '#10b981';
+  const t = Math.max(0, Math.min(1, (price - min) / (max - min)));
+  const segment = t * (PRICE_GRADIENT_COLORS.length - 1);
+  const idx = Math.min(Math.floor(segment), PRICE_GRADIENT_COLORS.length - 2);
+  const localT = segment - idx;
+  const c1 = PRICE_GRADIENT_COLORS[idx];
+  const c2 = PRICE_GRADIENT_COLORS[idx + 1];
+  const r = Math.round(c1.r + (c2.r - c1.r) * localT);
+  const g = Math.round(c1.g + (c2.g - c1.g) * localT);
+  const b = Math.round(c1.b + (c2.b - c1.b) * localT);
+  return `rgb(${r}, ${g}, ${b})`;
+}
 
 export default function ParselensPage() {
   const { isOpen: sidebarOpen, setIsOpen } = useSidebar();
@@ -46,11 +532,28 @@ export default function ParselensPage() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false); // Mobil drawer state
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false); // Mobil sidebar state
   const [isFilterOpen, setIsFilterOpen] = useState(false); // Filter popup state
+  const mapRef = useRef<any>(null); // Leaflet map instance ref
+  _setMapRef = useCallback((map: any) => { mapRef.current = map; }, []);
+  
+  // Adres arama state'leri
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [showSearchResults, setShowSearchResults] = useState(false);
+  const [searchPin, setSearchPin] = useState<[number, number] | null>(null); // Arama pin koordinatı
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+  const mobileSearchContainerRef = useRef<HTMLDivElement>(null);
   const [isLayersDropdownOpen, setIsLayersDropdownOpen] = useState(false); // Layers dropdown state
   const [talepYogunlugu, setTalepYogunlugu] = useState(false); // Talep yoğunluğu katmanı
   const [imarBaskisi, setImarBaskisi] = useState(false); // İmar baskısı katmanı
   const [ilSinirlari, setIlSinirlari] = useState(true); // İl sınırları katmanı (default açık)
   const [ilceSinirlari, setIlceSinirlari] = useState(false); // İlçe sınırları katmanı
+  // İmar öncesi sınır durumlarını sakla (geri yüklemek için)
+  const preImarRef = useRef<{ il: boolean; ilce: boolean } | null>(null);
+  // İmar parsel detayı
+  const [selectedParcel, setSelectedParcel] = useState<ParselDetail | null>(null);
+  const [parcelLoading, setParcelLoading] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const layersDropdownRef = useRef<HTMLDivElement>(null);
   
@@ -62,6 +565,7 @@ export default function ParselensPage() {
   const [showAll81Cities, setShowAll81Cities] = useState(false);
   const [analysisTitle, setAnalysisTitle] = useState('Türkiye Genel Bakış');
   const [propertyType, setPropertyType] = useState('Konut');
+  const [trendKategori, setTrendKategori] = useState('konut');
   
   // Ekonomik veri state'leri
   const [economicData, setEconomicData] = useState<EconomicData | null>(null);
@@ -73,9 +577,283 @@ export default function ParselensPage() {
   const [ilFiyatlariLoading, setIlFiyatlariLoading] = useState(true);
   const [ilFiyatlariError, setIlFiyatlariError] = useState<string | null>(null);
   
+  // İlçe fiyatları state'leri (seçili il'e göre)
+  const [ilceFiyatlari, setIlceFiyatlari] = useState<IlceFiyatlari | null>(null);
+
+  // Seçili il trend state'leri
+  const [ilTrend, setIlTrend] = useState<IlTrend | null>(null);
+  const [ilTrendLoading, setIlTrendLoading] = useState(false);
+
+  // trendKategori değişince il trendini yeniden çek
+  useEffect(() => {
+    if (!selectedIl) return;
+    const dbIlAdi = geoNameToDbName(selectedIl);
+    setIlTrendLoading(true);
+    getIlTrend(dbIlAdi, 120, trendKategori)
+      .then(data => setIlTrend(data))
+      .catch(err => console.error('İl trend çekilemedi:', err))
+      .finally(() => setIlTrendLoading(false));
+  }, [trendKategori]);
+
+  // Filtre uygulama handler'ı
+  const handleFiltersApply = useCallback((filters: FilterValues) => {
+    // Kategori mapping
+    const kategoriMap: Record<string, string> = {
+      'konut': 'konut',
+      'arsa': 'arsa',
+      'arazi': 'arazi',
+      'ticari': 'ticari',
+    };
+    const displayMap: Record<string, string> = {
+      'konut': 'Konut',
+      'arsa': 'Arsa',
+      'arazi': 'Arazi',
+      'ticari': 'Ticari',
+    };
+    
+    const newKategori = kategoriMap[filters.category] || 'konut';
+    setTrendKategori(newKategori);
+    setPropertyType(displayMap[filters.category] || 'Konut');
+  }, []);
+
   // Türkiye geneli trend state'leri
-  const [turkiyeTrend, setTurkiyeTrend] = useState<any>(null);
+  const [turkiyeTrend, setTurkiyeTrend] = useState<TurkiyeTrend | null>(null);
   const [turkiyeTrendLoading, setTurkiyeTrendLoading] = useState(true);
+
+  // Exa Chat - Context'ten
+  const { sessions, activeSessionId, activeSession, createSession, setActiveSession, addMessage, updateLastAssistantMessage, getSessionMessages, sessionExists } = useExaChat();
+  const [isExaChatOpen, setIsExaChatOpen] = useState(false);
+  const [exaChatInput, setExaChatInput] = useState('');
+  const [exaChatLoading, setExaChatLoading] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const [quickAnalysisSessionId, setQuickAnalysisSessionId] = useState<string | null>(null);
+
+  // Chat panel resize
+  const [chatPanelHeight, setChatPanelHeight] = useState(55); // yüzde
+  const chatResizing = useRef(false);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+
+  // Resize handler - sürükleme
+  const handleChatResizeStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    chatResizing.current = true;
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+
+    const handleMove = (ev: MouseEvent | TouchEvent) => {
+      if (!chatResizing.current || !chatContainerRef.current) return;
+      const container = chatContainerRef.current.parentElement;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const clientY = 'touches' in ev ? ev.touches[0].clientY : ev.clientY;
+      const newHeight = ((rect.bottom - clientY) / rect.height) * 100;
+      setChatPanelHeight(Math.min(90, Math.max(25, newHeight)));
+    };
+
+    const handleEnd = () => {
+      chatResizing.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', handleMove);
+      document.removeEventListener('mouseup', handleEnd);
+      document.removeEventListener('touchmove', handleMove);
+      document.removeEventListener('touchend', handleEnd);
+    };
+
+    document.addEventListener('mousemove', handleMove);
+    document.addEventListener('mouseup', handleEnd);
+    document.addEventListener('touchmove', handleMove);
+    document.addEventListener('touchend', handleEnd);
+  }, []);
+
+  // Hızlı analiz mesajları (aktif session'dan)
+  const exaChatMessages = quickAnalysisSessionId
+    ? (sessions.find(s => s.id === quickAnalysisSessionId)?.messages || [])
+    : [];
+
+  // Chat mesajı gönder
+  const exaAbortRef = useRef<AbortController | null>(null);
+  const handleExaChatSend = useCallback(async () => {
+    if (!exaChatInput.trim() || exaChatLoading) return;
+    const userMsg = exaChatInput.trim();
+    let context = selectedIl ? `${selectedIl} bölgesi` : 'Türkiye geneli';
+    // İmar modu + seçili parsel varsa zengin context gönder
+    if (imarBaskisi && selectedParcel) {
+      const p = selectedParcel.parsel;
+      const ib = selectedParcel.imar_baskisi;
+      const ti = selectedParcel.tapu_islem;
+      context += ` | İmar Modu Aktif | Seçili Parsel: Ada ${p.ada}/Parsel ${p.parsel}, ${p.mahalle} ${p.ilce}/${p.il}, Cins: ${p.cins}, Alan: ${Math.round(p.alan)} m², İmar Baskısı: ${ib.skor}/100 (${ib.seviye}, base:${ib.base_skor || 0} + tapu_bonus:${ib.tapu_bonus || 0}), Parsel ID: ${p.tapu_kimlik_no}`;
+      if (ti) {
+        context += ` | TKGM Tapu İşlem: Bu parsel ${ti.parsel_islem} işlem, Çevre ort: ${ti.cevre_ort}, Çevre max: ${ti.cevre_max}, Çevre toplam: ${ti.cevre_toplam || 0} işlem (${ti.cevre_parsel} parsel)`;
+      }
+    }
+
+    // Session yoksa VEYA mevcut session bulunamıyorsa yeni oluştur
+    let sessionId = quickAnalysisSessionId;
+    if (!sessionId || !sessionExists(sessionId)) {
+      sessionId = createSession(context, 'quick-analysis');
+      setQuickAnalysisSessionId(sessionId);
+    }
+
+    addMessage(sessionId, { role: 'user', content: userMsg });
+    setExaChatInput('');
+    setExaChatLoading(true);
+
+    // Önceki isteği iptal et
+    if (exaAbortRef.current) exaAbortRef.current.abort();
+    const controller = new AbortController();
+    exaAbortRef.current = controller;
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+    try {
+      const currentMessages = getSessionMessages(sessionId);
+      const allMessages = [...currentMessages, { role: 'user' as const, content: userMsg }];
+
+      const res = await fetch('/api/exa-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: allMessages,
+          context,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!res.ok) throw new Error(`API hatası: ${res.status}`);
+
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      if (!reader) throw new Error('Stream okunamadı');
+
+      // Boş asistan mesajı ekle
+      addMessage(sessionId, { role: 'assistant', content: '' });
+      setExaChatLoading(false);
+
+      let accumulated = '';
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data: ')) continue;
+          const data = trimmed.slice(6);
+          if (data === '[DONE]') break;
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.content) {
+              accumulated += parsed.content;
+              updateLastAssistantMessage(sessionId, accumulated);
+            }
+          } catch { /* JSON parse hatası, devam et */ }
+        }
+      }
+
+      if (!accumulated) {
+        updateLastAssistantMessage(sessionId, 'Yanıt alınamadı. Lütfen tekrar deneyin. 🔄');
+      }
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      const isAbort = err?.name === 'AbortError';
+      const errorMsg = isAbort
+        ? 'İstek zaman aşımına uğradı. ⏱️'
+        : 'Bağlantı hatası. Lütfen tekrar deneyin. 🔄';
+      addMessage(sessionId, { role: 'assistant', content: errorMsg });
+      setExaChatLoading(false);
+    }
+  }, [exaChatInput, exaChatLoading, quickAnalysisSessionId, selectedIl, createSession, addMessage, updateLastAssistantMessage, getSessionMessages, sessionExists]);
+
+  // Chat panel kapanınca session temizle (yeni açılınca yeni session)
+  useEffect(() => {
+    if (!isExaChatOpen) {
+      setQuickAnalysisSessionId(null);
+    }
+  }, [isExaChatOpen]);
+
+  // Chat scroll
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [exaChatMessages]);
+
+  // İl fiyatları: DB ismine göre fiyat lookup map + min/max
+  const ilFiyatMap = useMemo(() => {
+    const map: Record<string, { m2_fiyat: number; trend_12ay: number | null }> = {};
+    if (ilFiyatlari?.iller) {
+      for (const il of ilFiyatlari.iller) {
+        map[il.il] = { m2_fiyat: il.m2_fiyat, trend_12ay: il.trend_12ay };
+      }
+    }
+    return map;
+  }, [ilFiyatlari]);
+
+  const { priceMin, priceMax } = useMemo(() => {
+    if (!ilFiyatlari?.iller || ilFiyatlari.iller.length === 0) {
+      return { priceMin: 0, priceMax: 100000 };
+    }
+    const prices = ilFiyatlari.iller.map(il => il.m2_fiyat);
+    return { priceMin: Math.min(...prices), priceMax: Math.max(...prices) };
+  }, [ilFiyatlari]);
+
+  // GeoJSON feature'dan il fiyatını bul
+  const getIlPrice = (geoName: string) => {
+    const dbName = geoNameToDbName(geoName);
+    return ilFiyatMap[dbName] || null;
+  };
+
+  // GeoJSON feature'dan il rengini hesapla
+  const getIlColor = (geoName: string): string => {
+    const priceData = getIlPrice(geoName);
+    if (!priceData) return '#10b981'; // veri yoksa varsayılan yeşil
+    return getPriceColor(priceData.m2_fiyat, priceMin, priceMax);
+  };
+
+  // İlçe fiyatları: normalize ederek lookup map + min/max
+  const normalizeForMatch = (name: string): string => {
+    return name
+      .toLowerCase()
+      .replace(/ç/g, 'c').replace(/ğ/g, 'g').replace(/ı/g, 'i')
+      .replace(/ö/g, 'o').replace(/ş/g, 's').replace(/ü/g, 'u')
+      .replace(/Ç/g, 'c').replace(/Ğ/g, 'g').replace(/İ/g, 'i')
+      .replace(/Ö/g, 'o').replace(/Ş/g, 's').replace(/Ü/g, 'u')
+      .replace(/[^a-z0-9]/g, '');
+  };
+
+  const ilceFiyatMap = useMemo(() => {
+    const map: Record<string, { ilce: string; m2_fiyat: number }> = {};
+    if (ilceFiyatlari?.ilceler) {
+      for (const ilce of ilceFiyatlari.ilceler) {
+        const key = normalizeForMatch(ilce.ilce);
+        map[key] = { ilce: ilce.ilce, m2_fiyat: ilce.m2_fiyat };
+      }
+    }
+    return map;
+  }, [ilceFiyatlari]);
+
+  const { ilcePriceMin, ilcePriceMax } = useMemo(() => {
+    if (!ilceFiyatlari?.ilceler || ilceFiyatlari.ilceler.length === 0) {
+      return { ilcePriceMin: 0, ilcePriceMax: 100000 };
+    }
+    const prices = ilceFiyatlari.ilceler.map(i => i.m2_fiyat);
+    return { ilcePriceMin: Math.min(...prices), ilcePriceMax: Math.max(...prices) };
+  }, [ilceFiyatlari]);
+
+  const getIlcePrice = (geoIlceName: string) => {
+    const key = normalizeForMatch(geoIlceName);
+    return ilceFiyatMap[key] || null;
+  };
+
+  const getIlceColor = (geoIlceName: string): string => {
+    const data = getIlcePrice(geoIlceName);
+    if (!data) return '#06b6d4';
+    return getPriceColor(data.m2_fiyat, ilcePriceMin, ilcePriceMax);
+  };
 
   const tabs = [
     { id: 'genel', label: 'Genel' },
@@ -87,10 +865,10 @@ export default function ParselensPage() {
 
   // Mock data for score cards
   const scoreCards = [
-    { title: 'Konut', value: 85, change: 12, changeType: 'increase' },
-    { title: 'Al & Sat', value: 78, change: 5, changeType: 'increase' },
-    { title: 'Al & Kirala', value: 92, change: 8, changeType: 'increase' },
-    { title: 'Al & Otur', value: 87, change: 10, changeType: 'increase' }
+    { title: `emlaX ${propertyType}`, value: 85, change: 12, changeType: 'increase' },
+    { title: 'Satış Skoru', value: 78, change: 5, changeType: 'increase' },
+    { title: 'Kira Skoru', value: 92, change: 8, changeType: 'increase' },
+    { title: 'Yaşam Skoru', value: 87, change: 10, changeType: 'increase' }
   ];
 
   // Mock data for line chart
@@ -113,15 +891,29 @@ export default function ParselensPage() {
 
   // ECharts option - Gerçek API verisi ile
   const getChartOption = () => {
-    // Eğer Türkiye trend verisi yüklendiyse onu kullan
-    if (turkiyeTrend && turkiyeTrend.trend && turkiyeTrend.trend.length > 0) {
-      const aylar = turkiyeTrend.trend.map((item: any) => {
+    // İl seçiliyse il trendini, yoksa Türkiye trendini kullan
+    const activeTrend = selectedIl && ilTrend ? ilTrend.trend : turkiyeTrend?.trend;
+    
+    if (activeTrend && activeTrend.length > 0) {
+      const ayIsimleri = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
+      
+      const aylar = activeTrend.map((item) => {
         const [yil, ay] = item.tarih.split('-');
-        const ayIsmi = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'][parseInt(ay) - 1];
-        return ayIsmi;
+        return `${ayIsimleri[parseInt(ay) - 1]} ${yil.slice(2)}`;
       });
       
-      const values = turkiyeTrend.trend.map((item: any) => item.final_m2);
+      // Gerçek veri serisi
+      const gercekValues = activeTrend.map((item) => 
+        item.veri_tipi === 'gercek' ? item.m2_fiyat : null
+      );
+      
+      // Tahmin veri serisi (gerçeğin son noktasından devam etsin)
+      const lastGercekIdx = activeTrend.findLastIndex((item) => item.veri_tipi === 'gercek');
+      const tahminValues = activeTrend.map((item, idx) => {
+        if (idx === lastGercekIdx) return item.m2_fiyat; // Bağlantı noktası
+        if (item.veri_tipi === 'tahmin') return item.m2_fiyat;
+        return null;
+      });
       
       return {
         backgroundColor: 'transparent',
@@ -140,7 +932,8 @@ export default function ParselensPage() {
           },
           axisLabel: {
             color: 'rgba(255, 255, 255, 0.6)',
-            fontSize: 11
+            fontSize: 10,
+            interval: Math.floor(aylar.length / 8)
           }
         },
         yAxis: {
@@ -151,17 +944,17 @@ export default function ParselensPage() {
           axisLabel: {
             color: 'rgba(255, 255, 255, 0.6)',
             fontSize: 11,
-            formatter: (value: number) => {
-              return `${(value / 1000).toFixed(0)}K`;
-            }
+            formatter: (value: number) => `${(value / 1000).toFixed(0)}K`
           }
         },
         series: [
           {
-            data: values,
+            name: 'Gerçek',
+            data: gercekValues,
             type: 'line',
             smooth: true,
             showSymbol: false,
+            connectNulls: false,
             lineStyle: {
               width: 3,
               color: {
@@ -183,18 +976,44 @@ export default function ParselensPage() {
                 ]
               }
             }
+          },
+          {
+            name: 'Tahmin',
+            data: tahminValues,
+            type: 'line',
+            smooth: true,
+            showSymbol: false,
+            connectNulls: false,
+            lineStyle: {
+              width: 2,
+              type: 'dashed',
+              color: '#a78bfa'
+            },
+            areaStyle: {
+              color: {
+                type: 'linear',
+                x: 0, y: 0, x2: 0, y2: 1,
+                colorStops: [
+                  { offset: 0, color: 'rgba(167, 139, 250, 0.15)' },
+                  { offset: 1, color: 'rgba(167, 139, 250, 0.0)' }
+                ]
+              }
+            }
           }
         ],
         tooltip: {
           trigger: 'axis',
-          backgroundColor: 'rgba(0, 0, 0, 0.8)',
+          backgroundColor: 'rgba(0, 0, 0, 0.85)',
           borderColor: 'rgba(255, 255, 255, 0.2)',
           borderWidth: 1,
           textStyle: { color: '#fff', fontSize: 12 },
           formatter: (params: any) => {
-            const value = params[0].value;
-            const formattedValue = `${value.toLocaleString('tr-TR')} ₺/m²`;
-            return `${params[0].axisValue}<br/>${formattedValue}`;
+            const items = params.filter((p: any) => p.value != null);
+            if (items.length === 0) return '';
+            const item = items[0];
+            const value = item.value;
+            const tip = item.seriesName === 'Tahmin' ? ' (ML Tahmin)' : '';
+            return `<b>${item.axisValue}</b><br/>${value.toLocaleString('tr-TR')} ₺/m²${tip}`;
           }
         }
       };
@@ -325,11 +1144,314 @@ export default function ParselensPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeTab]);
 
+  // Akıllı arama: önce backend, backend boşsa Nominatim fallback
+  const searchAddress = useCallback(async (query: string) => {
+    if (!query || query.length < 2) {
+      setSearchResults([]);
+      setShowSearchResults(false);
+      return;
+    }
+    setSearchLoading(true);
+    try {
+      // Önce backend smart-search
+      const smartRes = await fetch(`/api/smart-search?q=${encodeURIComponent(query)}&limit=10`).then(r => r.json()).catch(() => null);
+      
+      const results: any[] = [];
+      
+      if (smartRes?.results?.length > 0) {
+        // Backend sonuçları var - bunları kullan
+        for (const r of smartRes.results) {
+          results.push({ ...r, source: 'backend' });
+        }
+      }
+      
+      // Backend 0 sonuç veya sadece il sonucu döndüyse, Nominatim ile zenginleştir
+      if (results.length < 3) {
+        try {
+          const nomData = await fetch(
+            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query + ' Türkiye')}&limit=3&addressdetails=1&countrycodes=tr&accept-language=tr`
+          ).then(r => r.json());
+          if (Array.isArray(nomData)) {
+            for (const r of nomData) {
+              results.push({ ...r, source: 'nominatim' });
+            }
+          }
+        } catch {}
+      }
+
+      setSearchResults(results);
+      setShowSearchResults(results.length > 0);
+    } catch (err) {
+      console.error('Arama hatası:', err);
+      setSearchResults([]);
+    } finally {
+      setSearchLoading(false);
+    }
+  }, []);
+
+  // Debounced arama - her tuşa basmada değil, 400ms bekle
+  const handleSearchInput = useCallback((value: string) => {
+    setSearchQuery(value);
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    if (value.length >= 2) {
+      searchTimeoutRef.current = setTimeout(() => searchAddress(value), 400);
+    } else {
+      setSearchResults([]);
+      setShowSearchResults(false);
+    }
+  }, [searchAddress]);
+
+  // Türkçe karakter normalizasyonu
+  const normTR = useCallback((s: string) => s.toLowerCase()
+    .replace(/ç/g,'c').replace(/ğ/g,'g').replace(/ı/g,'i')
+    .replace(/ö/g,'o').replace(/ş/g,'s').replace(/ü/g,'u')
+    .replace(/Ç/g,'c').replace(/Ğ/g,'g').replace(/İ/g,'i')
+    .replace(/Ö/g,'o').replace(/Ş/g,'s').replace(/Ü/g,'u'), []);
+
+  // İl adını GeoJSON feature ile eşleştir
+  const matchIlFeature = useCallback((ilName: string) => {
+    if (!illerGeoJSON?.features) return null;
+    const n = normTR(ilName);
+    return illerGeoJSON.features.find((f: any) => {
+      const geoName = f.properties?.NAME_1 || '';
+      const dbName = geoNameToDbName(geoName);
+      return normTR(dbName) === n || normTR(geoName) === n || geoName.toLowerCase() === ilName.toLowerCase();
+    });
+  }, [illerGeoJSON, normTR]);
+
+  // İl analizi açma yardımcı fonksiyonu
+  const openIlAnalysis = useCallback((ilGeoName: string, centerLat?: number, centerLon?: number) => {
+    setSelectedIl(ilGeoName);
+    if (!imarBaskisi) setIlceSinirlari(true);
+    setAnalysisTitle(`${ilGeoName} Analizi`);
+    setIlceFiyatlari(null);
+    setIlTrend(null);
+    
+    const dbIlAdi = geoNameToDbName(ilGeoName);
+    getIlceFiyatlari(dbIlAdi)
+      .then(data => setIlceFiyatlari(data))
+      .catch(err => console.error('İlçe fiyatları çekilemedi:', err));
+    
+    setIlTrendLoading(true);
+    getIlTrend(dbIlAdi, 120, trendKategori)
+      .then(data => setIlTrend(data))
+      .catch(err => console.error('İl trend çekilemedi:', err))
+      .finally(() => setIlTrendLoading(false));
+    
+    if (centerLat && centerLon) setSelectedIlCenter([centerLat, centerLon]);
+  }, [imarBaskisi, trendKategori]);
+
+  // Arama sonucuna tıklayınca: tipine göre aksiyon al
+  const handleSearchSelect = useCallback((result: any) => {
+    const map = mapRef.current;
+
+    // ============================================
+    // BACKEND SONUÇLARI (smart-search)
+    // ============================================
+    if (result.source === 'backend') {
+      
+      // Nominatim ile konum bul ve zoom + pin at yardımcı fonksiyon
+      const geocodeAndZoom = (query: string, zoom: number, maxZoom: number) => {
+        fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1&addressdetails=1&countrycodes=tr&accept-language=tr`)
+          .then(r => r.json())
+          .then(data => {
+            if (!data[0]) return;
+            const lat = parseFloat(data[0].lat);
+            const lon = parseFloat(data[0].lon);
+            // Pin at
+            setSearchPin([lat, lon]);
+            setSelectedIlCenter([lat, lon]);
+            // React re-render sonrası zoom yap (state güncellemeleri bitsin)
+            setTimeout(() => {
+              const m = mapRef.current;
+              if (!m) return;
+              if (data[0].boundingbox) {
+                const [s, n, w, e] = data[0].boundingbox.map(Number);
+                m.fitBounds([[s, w], [n, e]], { padding: [50, 50], maxZoom, animate: true, duration: 1 });
+              } else {
+                m.flyTo([lat, lon], zoom, { animate: true, duration: 1.5 });
+              }
+            }, 100);
+          })
+          .catch(err => console.error('Geocode hatası:', err));
+      };
+
+      // --- PARSEL SONUCU ---
+      if (result.type === 'parsel' && result.lat && result.lon) {
+        setIlSinirlari(false);
+        setIlceSinirlari(false);
+        setSearchPin([result.lat, result.lon]);
+        setTimeout(() => {
+          const m = mapRef.current;
+          if (m) m.flyTo([result.lat, result.lon], 18, { animate: true, duration: 1.5 });
+        }, 100);
+        const feature = matchIlFeature(result.il);
+        if (feature) openIlAnalysis(feature.properties.NAME_1, result.lat, result.lon);
+        if (result.id) {
+          setParcelLoading(true);
+          setSelectedParcel(null);
+          fetch(`/api/parcel-detail?id=${encodeURIComponent(result.id)}`)
+            .then(r => r.json())
+            .then(data => { if (!data.error) setSelectedParcel(data); })
+            .catch(console.error)
+            .finally(() => setParcelLoading(false));
+        }
+        setSearchQuery(result.display);
+        setShowSearchResults(false);
+        setSearchResults([]);
+        return;
+      }
+      
+      // --- MAHALLE SONUCU ---
+      if (result.type === 'mahalle') {
+        setIlSinirlari(false);
+        setIlceSinirlari(false);
+        setAnalysisTitle(`${result.display} Analizi`);
+        // display'den doğru isim kullan (ör: "Yalıkavak, Bodrum/Muğla")
+        geocodeAndZoom(`${result.display} Türkiye`, 15, 16);
+        const mFeature = matchIlFeature(result.il);
+        if (mFeature) {
+          setSelectedIl(mFeature.properties.NAME_1);
+          const dbIl = geoNameToDbName(mFeature.properties.NAME_1);
+          setIlceFiyatlari(null);
+          setIlTrend(null);
+          getIlceFiyatlari(dbIl).then(d => setIlceFiyatlari(d)).catch(console.error);
+          setIlTrendLoading(true);
+          getIlTrend(dbIl, 120, trendKategori).then(d => setIlTrend(d)).catch(console.error).finally(() => setIlTrendLoading(false));
+        }
+        setSearchQuery(result.display);
+        setShowSearchResults(false);
+        setSearchResults([]);
+        return;
+      }
+      
+      // --- İLÇE SONUCU ---
+      if (result.type === 'ilce') {
+        setIlSinirlari(false);
+        setIlceSinirlari(false);
+        setAnalysisTitle(`${result.display} Analizi`);
+        // display'den doğru isim kullan (ör: "Bodrum, Muğla")
+        geocodeAndZoom(`${result.display} Türkiye`, 12, 13);
+        const iFeature = matchIlFeature(result.il);
+        if (iFeature) {
+          setSelectedIl(iFeature.properties.NAME_1);
+          const dbIl = geoNameToDbName(iFeature.properties.NAME_1);
+          setIlceFiyatlari(null);
+          setIlTrend(null);
+          getIlceFiyatlari(dbIl).then(d => setIlceFiyatlari(d)).catch(console.error);
+          setIlTrendLoading(true);
+          getIlTrend(dbIl, 120, trendKategori).then(d => setIlTrend(d)).catch(console.error).finally(() => setIlTrendLoading(false));
+        }
+        setSearchQuery(result.display);
+        setShowSearchResults(false);
+        setSearchResults([]);
+        return;
+      }
+      
+      // --- İL SONUCU ---
+      if (result.type === 'il') {
+        setSearchPin(null);
+        const feature = matchIlFeature(result.il);
+        if (feature) {
+          const L = require('leaflet');
+          const geoLayer = L.geoJSON(feature);
+          const bounds = geoLayer.getBounds();
+          const center = bounds.getCenter();
+          openIlAnalysis(feature.properties.NAME_1, center.lat, center.lng);
+          setTimeout(() => {
+            const m = mapRef.current;
+            if (m) m.fitBounds(bounds, { padding: [50, 50], maxZoom: 10, animate: true, duration: 1 });
+          }, 100);
+        } else {
+          geocodeAndZoom(`${result.display} Türkiye`, 9, 10);
+          openIlAnalysis(result.display);
+        }
+        setSearchQuery(result.display);
+        setShowSearchResults(false);
+        setSearchResults([]);
+        return;
+      }
+    }
+
+    // ============================================
+    // NOMİNATİM SONUÇLARI (fallback)
+    // ============================================
+    const lat = parseFloat(result.lat);
+    const lon = parseFloat(result.lon);
+    
+    // Pin at
+    setSearchPin([lat, lon]);
+    
+    // İl analizini aç
+    const address = result.address || {};
+    const ilAdi = address.province || address.state || '';
+    if (ilAdi) {
+      const feature = matchIlFeature(ilAdi);
+      if (feature) openIlAnalysis(feature.properties.NAME_1, lat, lon);
+    }
+    
+    // Re-render sonrası zoom yap
+    const bb = result.boundingbox;
+    setTimeout(() => {
+      const m = mapRef.current;
+      if (!m) return;
+      if (bb) {
+        const [south, north, west, east] = bb.map(Number);
+        m.fitBounds([[south, west], [north, east]], { padding: [50, 50], maxZoom: 16, animate: true, duration: 1 });
+      } else {
+        m.flyTo([lat, lon], 14, { animate: true, duration: 1.5 });
+      }
+    }, 100);
+    
+    setSearchQuery(result.display_name?.split(',')[0] || result.display || '');
+    setShowSearchResults(false);
+    setSearchResults([]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchIlFeature, openIlAnalysis, trendKategori]);
+
+  // Arama dropdown'ını dışarı tıklayınca kapat
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node) &&
+        mobileSearchContainerRef.current && !mobileSearchContainerRef.current.contains(e.target as Node)
+      ) {
+        setShowSearchResults(false);
+      }
+      // Sadece biri varsa da kontrol et
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node) && !mobileSearchContainerRef.current) {
+        setShowSearchResults(false);
+      }
+      if (mobileSearchContainerRef.current && !mobileSearchContainerRef.current.contains(e.target as Node) && !searchContainerRef.current) {
+        setShowSearchResults(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   // İl tıklama handler
   const handleIlClick = (ilAdi: string, layer: any) => {
+    setSearchPin(null); // Pin'i temizle
     setSelectedIl(ilAdi);
-    setIlceSinirlari(true); // İlçe katmanını otomatik aç
+    if (!imarBaskisi) {
+      setIlceSinirlari(true); // İlçe katmanını otomatik aç (imar modu kapalıysa)
+    }
     setAnalysisTitle(`${ilAdi} Analizi`); // Başlığı güncelle
+    setIlceFiyatlari(null); // Önceki ilçe verisini temizle
+    setIlTrend(null); // Önceki il trendini temizle
+    
+    // İlçe fiyatlarını ve il trendini çek (DB'deki il adını kullan)
+    const dbIlAdi = geoNameToDbName(ilAdi);
+    getIlceFiyatlari(dbIlAdi)
+      .then(data => setIlceFiyatlari(data))
+      .catch(err => console.error('İlçe fiyatları çekilemedi:', err));
+    
+    setIlTrendLoading(true);
+    getIlTrend(dbIlAdi, 120, trendKategori)
+      .then(data => setIlTrend(data))
+      .catch(err => console.error('İl trend çekilemedi:', err))
+      .finally(() => setIlTrendLoading(false));
     
     // Haritayı zoom yap - layer'dan map instance'ını al
     const map = layer._map;
@@ -346,6 +1468,51 @@ export default function ParselensPage() {
       });
     }
   };
+
+  // Parsel tıklama handler (İmar modu)
+  const handleParcelClick = useCallback(async (parcelId: string) => {
+    setParcelLoading(true);
+    setSelectedParcel(null);
+    try {
+      const res = await fetch(`/api/parcel-detail?id=${encodeURIComponent(parcelId)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data.error) {
+        setSelectedParcel(data);
+        // İlçe trend verisi güncelle
+        if (data.parsel?.ilce && data.parsel?.il) {
+          const dbIl = geoNameToDbName(data.parsel.il);
+          setAnalysisTitle(`${data.parsel.ada}/${data.parsel.parsel} - ${data.parsel.mahalle}`);
+        }
+      }
+    } catch (err) {
+      console.error('Parsel detay hatası:', err);
+    } finally {
+      setParcelLoading(false);
+    }
+  }, []);
+
+  // İmar Baskısı toggle handler
+  const handleImarBaskisiToggle = useCallback((checked: boolean) => {
+    if (checked) {
+      // İmar açılıyor: mevcut il/ilçe sınır durumlarını sakla ve kapat
+      preImarRef.current = { il: ilSinirlari, ilce: ilceSinirlari };
+      setIlSinirlari(false);
+      setIlceSinirlari(false);
+      setImarBaskisi(true);
+    } else {
+      // İmar kapanıyor: önceki durumları geri yükle
+      setImarBaskisi(false);
+      setSelectedParcel(null);
+      if (preImarRef.current) {
+        setIlSinirlari(preImarRef.current.il);
+        setIlceSinirlari(preImarRef.current.ilce);
+        preImarRef.current = null;
+      } else {
+        setIlSinirlari(true); // Varsayılan: il sınırları açık
+      }
+    }
+  }, [ilSinirlari, ilceSinirlari]);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -408,12 +1575,12 @@ export default function ParselensPage() {
     return () => clearInterval(interval);
   }, []);
 
-  // İl fiyatlarını çek
+  // İl fiyatlarını çek (trendKategori değişince yeniden çek)
   useEffect(() => {
     const fetchIlFiyatlari = async () => {
       try {
         setIlFiyatlariLoading(true);
-        const data = await getIlFiyatlari('konut');
+        const data = await getIlFiyatlari(trendKategori);
         setIlFiyatlari(data);
         setIlFiyatlariError(null);
       } catch (error) {
@@ -429,14 +1596,14 @@ export default function ParselensPage() {
     // Her 30 dakikada bir güncelle (il fiyatları daha az değişir)
     const interval = setInterval(fetchIlFiyatlari, 30 * 60 * 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [trendKategori]);
 
-  // Türkiye geneli trend verisi çek
+  // Türkiye geneli trend verisi çek (trendKategori değişince yeniden çek)
   useEffect(() => {
     const fetchTurkiyeTrend = async () => {
       try {
         setTurkiyeTrendLoading(true);
-        const data = await getIlTrend('TURKIYE', 'konut', 'satilik', 61);
+        const data = await getTurkiyeTrend(120, trendKategori);
         setTurkiyeTrend(data);
       } catch (error) {
         console.error('Türkiye trend çekilemedi:', error);
@@ -446,7 +1613,7 @@ export default function ParselensPage() {
     };
 
     fetchTurkiyeTrend();
-  }, []);
+  }, [trendKategori]);
 
   // Close layers dropdown when clicking outside
   useEffect(() => {
@@ -515,7 +1682,7 @@ export default function ParselensPage() {
                 <h2 className="text-xl font-medium text-white">{analysisTitle}</h2>
               </div>
               <span className="text-sm font-medium text-white/80 bg-white/10 px-3 py-1.5 rounded-lg">
-                {propertyType}
+                {imarBaskisi ? 'Arsa' : propertyType}
               </span>
             </div>
             
@@ -546,6 +1713,254 @@ export default function ParselensPage() {
             <div className="space-y-4">
               {activeTab === 'genel' && (
                 <>
+                  {/* İmar Modu - Parsel Detay Kartı */}
+                  {imarBaskisi && (selectedParcel || parcelLoading) && (
+                    <div className="bg-gradient-to-br from-amber-500/5 to-red-500/5 backdrop-blur-sm border border-amber-500/20 rounded-xl overflow-hidden">
+                      {parcelLoading ? (
+                        <div className="p-6 flex items-center justify-center gap-3">
+                          <div className="w-5 h-5 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
+                          <span className="text-white/50 text-sm">Parsel analiz ediliyor...</span>
+                        </div>
+                      ) : selectedParcel ? (
+                        <>
+                          {/* Parsel Başlık */}
+                          <div className="px-4 pt-4 pb-3 border-b border-white/5">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <img src="/icons/map-point-rotate.svg" alt="Parsel" className="w-6 h-6" style={{ filter: 'brightness(0) invert(1)' }} />
+                                  <div>
+                                    <h3 className="text-white text-sm font-semibold">Ada {selectedParcel.parsel.ada} / Parsel {selectedParcel.parsel.parsel}</h3>
+                                    <p className="text-white/40 text-[10px]">{selectedParcel.parsel.mahalle} • {selectedParcel.parsel.ilce} / {selectedParcel.parsel.il}</p>
+                                  </div>
+                                </div>
+                              </div>
+                              <button onClick={() => setSelectedParcel(null)} className="p-1.5 rounded-md hover:bg-white/10 transition-colors">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* İmar Baskısı Durumu */}
+                          <div className="px-4 py-3 border-b border-white/5">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-white/50 text-xs font-medium">İmar Baskısı Durumu</span>
+                              <div className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                selectedParcel.imar_baskisi.seviye === 'cok_yuksek' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
+                                selectedParcel.imar_baskisi.seviye === 'yuksek' ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' :
+                                selectedParcel.imar_baskisi.seviye === 'orta' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
+                                selectedParcel.imar_baskisi.seviye === 'dusuk' ? 'bg-lime-500/20 text-lime-400 border border-lime-500/30' :
+                                'bg-green-500/20 text-green-400 border border-green-500/30'
+                              }`}>
+                                Skor: {selectedParcel.imar_baskisi.skor}/100
+                              </div>
+                            </div>
+                            {/* Progress bar */}
+                            <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden mb-2">
+                              <div className="h-full rounded-full transition-all duration-500" style={{
+                                width: `${Math.min(100, selectedParcel.imar_baskisi.skor)}%`,
+                                background: `linear-gradient(to right, #22c55e, #eab308, #f97316, #ef4444)`,
+                              }} />
+                            </div>
+                            <p className="text-white/40 text-[10px] leading-relaxed">{selectedParcel.imar_baskisi.aciklama}</p>
+                            {/* Skor kırılımı */}
+                            {selectedParcel.imar_baskisi.base_skor != null && (
+                              <div className="flex items-center gap-2 mt-2">
+                                <div className="flex-1 bg-white/5 rounded px-2 py-1">
+                                  <div className="text-white/25 text-[8px]">Çevre Baskısı</div>
+                                  <div className="text-amber-400 text-[11px] font-bold">{selectedParcel.imar_baskisi.base_skor}</div>
+                                </div>
+                                <span className="text-white/20 text-[10px]">+</span>
+                                <div className="flex-1 bg-white/5 rounded px-2 py-1">
+                                  <div className="text-white/25 text-[8px]">Tapu Hacim Bonusu</div>
+                                  <div className="text-blue-400 text-[11px] font-bold">{selectedParcel.imar_baskisi.tapu_bonus || 0}</div>
+                                </div>
+                                <span className="text-white/20 text-[10px]">=</span>
+                                <div className="flex-1 bg-white/5 rounded px-2 py-1">
+                                  <div className="text-white/25 text-[8px]">Toplam</div>
+                                  <div className="text-white text-[11px] font-bold">{selectedParcel.imar_baskisi.skor}</div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Tapu İşlem Hacmi */}
+                          {selectedParcel.tapu_islem && (
+                            <div className="px-4 py-3 border-b border-white/5">
+                              <span className="text-white/50 text-xs font-medium block mb-2">TKGM Tapu İşlem Hacmi</span>
+                              <div className="grid grid-cols-2 gap-2">
+                                <div className="bg-blue-500/5 border border-blue-500/10 rounded-lg px-2.5 py-2">
+                                  <div className="text-white/30 text-[9px]">Bu Parsel</div>
+                                  <div className="text-blue-400 text-[13px] font-bold">{selectedParcel.tapu_islem.parsel_islem} <span className="text-[9px] text-white/30 font-normal">işlem</span></div>
+                                </div>
+                                <div className="bg-white/5 rounded-lg px-2.5 py-2">
+                                  <div className="text-white/30 text-[9px]">Çevre Ort. (500m)</div>
+                                  <div className="text-white text-[13px] font-bold">{selectedParcel.tapu_islem.cevre_ort} <span className="text-[9px] text-white/30 font-normal">işlem</span></div>
+                                </div>
+                                <div className="bg-white/5 rounded-lg px-2.5 py-2">
+                                  <div className="text-white/30 text-[9px]">Çevre Max</div>
+                                  <div className="text-white text-[13px] font-bold">{selectedParcel.tapu_islem.cevre_max} <span className="text-[9px] text-white/30 font-normal">işlem</span></div>
+                                </div>
+                                <div className="bg-white/5 rounded-lg px-2.5 py-2">
+                                  <div className="text-white/30 text-[9px]">Çevre Toplam ({selectedParcel.tapu_islem.cevre_parsel} parsel)</div>
+                                  <div className="text-white text-[13px] font-bold">{selectedParcel.tapu_islem.cevre_toplam || 0} <span className="text-[9px] text-white/30 font-normal">işlem</span></div>
+                                </div>
+                              </div>
+                              <div className="text-white/20 text-[8px] mt-1.5 text-center">Kaynak: Tapu ve Kadastro Genel Müdürlüğü (TKGM)</div>
+                            </div>
+                          )}
+
+                          {/* Parsel Bilgileri */}
+                          <div className="px-4 py-3 border-b border-white/5">
+                            <span className="text-white/50 text-xs font-medium block mb-2">Parsel Bilgileri</span>
+                            <div className="grid grid-cols-3 gap-2">
+                              {[
+                                { label: 'Cins', value: selectedParcel.parsel.cins },
+                                { label: 'Alan', value: `${Math.round(selectedParcel.parsel.alan).toLocaleString('tr-TR')} m²` },
+                                { label: 'Gerçek Alan', value: `${Math.round(selectedParcel.parsel.gercek_alan_m2).toLocaleString('tr-TR')} m²` },
+                              ].map((item, i) => (
+                                <div key={i} className="bg-white/5 rounded-lg px-2.5 py-2">
+                                  <div className="text-white/30 text-[9px]">{item.label}</div>
+                                  <div className="text-white text-[11px] font-medium truncate">{item.value}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Kadastro Mesafeleri */}
+                          <div className="px-4 py-3 border-b border-white/5">
+                            <span className="text-white/50 text-xs font-medium block mb-2">Kadastro Mesafeleri</span>
+                            <div className="grid grid-cols-2 gap-2">
+                              {[
+                                { label: 'En Yakın Yol', value: selectedParcel.mesafeler.yol, icon: '🛤️', color: '#6b7280' },
+                                { label: 'En Yakın Arsa', value: selectedParcel.mesafeler.arsa, icon: '🏗️', color: '#f59e0b' },
+                                { label: 'En Yakın Konut', value: selectedParcel.mesafeler.konut, icon: '🏠', color: '#3b82f6' },
+                                { label: 'En Yakın Ticari', value: selectedParcel.mesafeler.ticari, icon: '🏢', color: '#8b5cf6' },
+                              ].map((item, i) => (
+                                <div key={i} className="bg-white/5 rounded-lg px-2.5 py-2 flex items-center gap-2">
+                                  <span className="text-sm">{item.icon}</span>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-white/30 text-[9px]">{item.label}</div>
+                                    <div className="text-white text-[11px] font-medium">
+                                      {item.value != null ? (item.value < 1000 ? `${Math.round(item.value)} m` : `${(item.value / 1000).toFixed(1)} km`) : '—'}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* POI Mesafeleri (Overpass) */}
+                          {selectedParcel.poi_mesafeler && (
+                            <div className="px-4 py-3 border-b border-white/5">
+                              <span className="text-white/50 text-xs font-medium block mb-2">Çevre Mesafeleri</span>
+                              <div className="grid grid-cols-2 gap-2">
+                                {[
+                                  { label: 'Okul', data: selectedParcel.poi_mesafeler.okul, icon: '🏫' },
+                                  { label: 'Hastane', data: selectedParcel.poi_mesafeler.hastane, icon: '🏥' },
+                                  { label: 'AVM / Market', data: selectedParcel.poi_mesafeler.avm, icon: '🛒' },
+                                  { label: 'Otobüs Durağı', data: selectedParcel.poi_mesafeler.otobus, icon: '🚌' },
+                                  { label: 'Sanayi Bölgesi', data: selectedParcel.poi_mesafeler.sanayi, icon: '🏭' },
+                                  { label: 'Havalimanı', data: selectedParcel.poi_mesafeler.havalimani, icon: '✈️' },
+                                ].map((item, i) => (
+                                  <div key={i} className="bg-white/5 rounded-lg px-2.5 py-2 flex items-center gap-2">
+                                    <span className="text-sm">{item.icon}</span>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-white/30 text-[9px]">{item.label}</div>
+                                      {item.data ? (
+                                        <>
+                                          <div className="text-white text-[11px] font-medium">
+                                            {item.data.distance_m < 1000 ? `${item.data.distance_m} m` : `${(item.data.distance_m / 1000).toFixed(1)} km`}
+                                          </div>
+                                          {item.data.name && <div className="text-white/25 text-[8px] truncate">{item.data.name}</div>}
+                                        </>
+                                      ) : (
+                                        <div className="text-white/20 text-[10px]">{item.label === 'Havalimanı' ? '50 km içinde yok' : '5 km içinde yok'}</div>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Bölge Dağılımı */}
+                          {selectedParcel.bolge_dagilim && selectedParcel.bolge_dagilim.length > 0 && (
+                            <div className="px-4 py-3">
+                              <span className="text-white/50 text-xs font-medium block mb-2">Çevre Parsel Dağılımı (~500m)</span>
+                              <div className="space-y-1.5">
+                                {selectedParcel.bolge_dagilim.map((d, i) => {
+                                  const total = selectedParcel.bolge_dagilim.reduce((sum, x) => sum + x.sayi, 0);
+                                  const pct = total > 0 ? (d.sayi / total) * 100 : 0;
+                                  const colors: Record<string, string> = {
+                                    'Arsa': '#f59e0b', 'Konut': '#3b82f6', 'Ticari': '#8b5cf6',
+                                    'Tarim': '#22c55e', 'Orman': '#065f46', 'HamToprak': '#78716c',
+                                    'Yol': '#6b7280', 'Diger': '#a78bfa',
+                                  };
+                                  return (
+                                    <div key={i} className="flex items-center gap-2">
+                                      <div className="w-14 text-[10px] text-white/40 truncate">{d.kategori}</div>
+                                      <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
+                                        <div className="h-full rounded-full transition-all duration-500" style={{
+                                          width: `${pct}%`,
+                                          backgroundColor: colors[d.kategori] || '#a78bfa',
+                                        }} />
+                                      </div>
+                                      <div className="w-8 text-[10px] text-white/40 text-right">{d.sayi}</div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      ) : null}
+                    </div>
+                  )}
+
+                  {/* Line Chart Kartı - Üstte */}
+                  <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-xl p-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-white text-sm font-medium">
+                        {selectedIl ? `${selectedIl} m² Fiyat Trendi` : 'Türkiye m² Fiyat Trendi'}
+                        {ilTrendLoading && selectedIl && <span className="text-white/40 text-xs ml-2">yükleniyor...</span>}
+                      </h3>
+                      <div className="flex items-center gap-2">
+                        {selectedIl && (
+                          <select
+                            value={trendKategori}
+                            onChange={(e) => setTrendKategori(e.target.value)}
+                            className="bg-white/10 border border-white/10 text-white text-xs rounded-lg px-3 py-1.5 outline-none focus:border-blue-500"
+                          >
+                            <option value="konut">Konut</option>
+                            <option value="arsa">Arsa (İmarlı)</option>
+                            <option value="arazi">Arazi (Tarla)</option>
+                            <option value="ticari">Ticari</option>
+                          </select>
+                        )}
+                        <select 
+                          value={selectedMetric}
+                          onChange={(e) => setSelectedMetric(e.target.value)}
+                          className="bg-white/10 border border-white/10 text-white text-xs rounded-lg px-3 py-1.5 outline-none focus:border-blue-500"
+                        >
+                          <option value="m2">m² Fiyatı</option>
+                          <option value="satis">Satış Fiyatı</option>
+                          <option value="kira">Kira Getirisi</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="h-80">
+                      <ReactECharts 
+                        option={getChartOption()} 
+                        style={{ height: '100%', width: '100%' }}
+                        opts={{ renderer: 'canvas' }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Skor Kartları - Altta */}
                   <div className="grid grid-cols-4 gap-4">
                     {scoreCards.map((card, index) => (
                       <div
@@ -632,41 +2047,18 @@ export default function ParselensPage() {
                     </div>
                   </div>
 
-                  {/* Line Chart Kartı */}
-                  <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-xl p-4">
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-white text-sm font-medium">m² Fiyat Trendi</h3>
-                      <select 
-                        value={selectedMetric}
-                        onChange={(e) => setSelectedMetric(e.target.value)}
-                        className="bg-white/10 border border-white/10 text-white text-xs rounded-lg px-3 py-1.5 outline-none focus:border-blue-500"
-                      >
-                        <option value="m2">m² Fiyatı</option>
-                        <option value="satis">Satış Fiyatı</option>
-                        <option value="kira">Kira Getirisi</option>
-                      </select>
-                    </div>
-                    <div className="h-80">
-                      <ReactECharts 
-                        option={getChartOption()} 
-                        style={{ height: '100%', width: '100%' }}
-                        opts={{ renderer: 'canvas' }}
-                      />
-                    </div>
-                    
-                    {/* Disclaimer */}
-                    <div className="mt-4 pt-3 border-t border-white/10">
-                      <div className="space-y-2 text-[10px] text-white/40 leading-relaxed">
-                        <p>
-                          <span className="text-white/50 font-medium">* emlaXAI Sorumluluk Reddi:</span> Bu ekranda sunulan tüm analiz, skor, tahmin ve grafik verileri; Tapu ve Kadastro Genel Müdürlüğü (TKGM), TÜİK, belediyeler, açık devlet kaynakları, ilan portalları, üçüncü taraf veri sağlayıcıları ve kullanıcı girdileri gibi farklı kaynaklardan derlenerek yapay zekâ destekli algoritmalar ile işlenmektedir.
-                        </p>
-                        <p>
-                          Sunulan bilgiler <span className="text-white/50">bilgilendirme ve analiz amaçlıdır</span>; hiçbir şekilde kesin yatırım tavsiyesi, alım-satım yönlendirmesi veya hukuki/mali danışmanlık niteliği taşımaz. Veriler sapmalar içerebilir ve son 3 aylık periyotta yeni verilerin eklenmesiyle değişiklik gösterebilir.
-                        </p>
-                        <p>
-                          Bu bilgilerin bir yatırım veya ticarete konu edilmesi halinde emlaXAI hiçbir sorumluluk üstlenmez.
-                        </p>
-                      </div>
+                  {/* Disclaimer */}
+                  <div className="pt-3 border-t border-white/10">
+                    <div className="space-y-2 text-[10px] text-white/40 leading-relaxed">
+                      <p>
+                        <span className="text-white/50 font-medium">* emlaXAI Sorumluluk Reddi:</span> Bu ekranda sunulan tüm analiz, skor, tahmin ve grafik verileri; Tapu ve Kadastro Genel Müdürlüğü (TKGM), TÜİK, belediyeler, açık devlet kaynakları, ilan portalları, üçüncü taraf veri sağlayıcıları ve kullanıcı girdileri gibi farklı kaynaklardan derlenerek yapay zekâ destekli algoritmalar ile işlenmektedir.
+                      </p>
+                      <p>
+                        Sunulan bilgiler <span className="text-white/50">bilgilendirme ve analiz amaçlıdır</span>; hiçbir şekilde kesin yatırım tavsiyesi, alım-satım yönlendirmesi veya hukuki/mali danışmanlık niteliği taşımaz. Veriler sapmalar içerebilir ve son 3 aylık periyotta yeni verilerin eklenmesiyle değişiklik gösterebilir.
+                      </p>
+                      <p>
+                        Bu bilgilerin bir yatırım veya ticarete konu edilmesi halinde emlaXAI hiçbir sorumluluk üstlenmez.
+                      </p>
                     </div>
                   </div>
                 </>
@@ -1029,8 +2421,8 @@ export default function ParselensPage() {
                               {ilFiyatlari.iller.slice(0, showAll81Cities ? ilFiyatlari.total : 20).map((item, index) => {
                                 // AI Skoru hesaplama (momentum + trend + fiyat)
                                 const priceScore = (item.m2_fiyat / ilFiyatlari.iller[0].m2_fiyat) * 40; // Max 40 puan
-                                const trendScore = Math.min(item.trend_12ay / 2, 40); // Max 40 puan
-                                const momentumScore = item.momentum * 4; // Max 20 puan
+                                const trendScore = Math.min((item.trend_12ay || 0) / 2, 40); // Max 40 puan
+                                const momentumScore = ((item as any).momentum || 0) * 4; // Max 20 puan
                                 const aiScore = Math.round(priceScore + trendScore + momentumScore);
                                 
                                 return (
@@ -1040,11 +2432,11 @@ export default function ParselensPage() {
                                     <td className="py-3 px-2 text-white text-right">{(item.m2_fiyat / 1000).toFixed(1)}K ₺</td>
                                     <td className="py-3 px-2 text-right">
                                       <span className={`font-semibold ${
-                                        item.trend_12ay >= 50 ? 'text-red-400' : 
-                                        item.trend_12ay >= 30 ? 'text-orange-400' : 
+                                        (item.trend_12ay ?? 0) >= 50 ? 'text-red-400' : 
+                                        (item.trend_12ay ?? 0) >= 30 ? 'text-orange-400' : 
                                         'text-green-400'
                                       }`}>
-                                        +{item.trend_12ay.toFixed(1)}%
+                                        +{(item.trend_12ay ?? 0).toFixed(1)}%
                                       </span>
                                     </td>
                                     <td className="py-3 px-2 text-center">
@@ -1052,7 +2444,7 @@ export default function ParselensPage() {
                                         {Array.from({ length: 5 }).map((_, i) => (
                                           <div 
                                             key={i} 
-                                            className={`w-1.5 h-4 rounded-sm ${i < item.momentum ? 'bg-blue-500' : 'bg-white/10'}`}
+                                            className={`w-1.5 h-4 rounded-sm ${i < ((item as any).momentum || 0) ? 'bg-blue-500' : 'bg-white/10'}`}
                                           ></div>
                                         ))}
                                       </div>
@@ -1693,7 +3085,7 @@ export default function ParselensPage() {
                               grid: { top: 40, right: 60, bottom: 50, left: 50 },
                               xAxis: {
                                 type: 'category',
-                                data: economicData.historical_inflation_housing.inflation.map(d => d.month.split(' ')[0]),
+                                data: ((economicData as any).historical_inflation_housing?.inflation || []).map((d: any) => d.month?.split(' ')[0]),
                                 axisLabel: { color: '#9ca3af', fontSize: 11 }
                               },
                               yAxis: [
@@ -1726,7 +3118,7 @@ export default function ParselensPage() {
                                 {
                                   name: 'Enflasyon',
                                   type: 'line',
-                                  data: economicData.historical_inflation_housing.inflation.map(d => d.value),
+                                  data: ((economicData as any).historical_inflation_housing?.inflation || []).map((d: any) => d.value),
                                   itemStyle: { color: '#ef4444' },
                                   smooth: true,
                                   areaStyle: { opacity: 0.1 }
@@ -1734,7 +3126,7 @@ export default function ParselensPage() {
                                 {
                                   name: 'Emlak Fiyat Artışı',
                                   type: 'line',
-                                  data: economicData.historical_inflation_housing.housing_price_increase.map(d => d.value),
+                                  data: ((economicData as any).historical_inflation_housing?.housing_price_increase || []).map((d: any) => d.value),
                                   itemStyle: { color: '#06b6d4' },
                                   smooth: true,
                                   areaStyle: { opacity: 0.1 }
@@ -2639,7 +4031,7 @@ export default function ParselensPage() {
             <div ref={layersDropdownRef} className="relative">
               <button 
                 onClick={() => setIsLayersDropdownOpen(!isLayersDropdownOpen)}
-                className="px-3 py-2 bg-black/80 backdrop-blur-md border border-white/20 rounded-lg text-white text-xs font-medium hover:bg-white/10 transition-all duration-200 flex items-center gap-1.5 flex-shrink-0 outline-none focus:outline-none"
+                className="px-4 py-3 bg-black/80 backdrop-blur-md border border-white/20 rounded-lg text-white text-xs font-medium hover:bg-white/10 transition-all duration-200 flex items-center gap-1.5 flex-shrink-0 outline-none focus:outline-none"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
@@ -2680,15 +4072,16 @@ export default function ParselensPage() {
                   </label>
 
                   {/* İmar Baskısı */}
-                  <label className="flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors border-b border-white/10">
+                  <label className={`flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors border-b border-white/10 ${!selectedIl ? 'opacity-40 pointer-events-none' : ''}`}>
                     <div className="relative flex-shrink-0">
                       <input
                         type="checkbox"
                         checked={imarBaskisi}
-                        onChange={(e) => setImarBaskisi(e.target.checked)}
+                        onChange={(e) => handleImarBaskisiToggle(e.target.checked)}
                         className="sr-only peer"
+                        disabled={!selectedIl}
                       />
-                      <div className="w-4 h-4 rounded-full border-2 border-white/30 peer-checked:border-blue-500 peer-checked:bg-blue-500 transition-all duration-200 flex items-center justify-center">
+                      <div className="w-4 h-4 rounded-full border-2 border-white/30 peer-checked:border-amber-500 peer-checked:bg-amber-500 transition-all duration-200 flex items-center justify-center">
                         {imarBaskisi && (
                           <div className="w-2 h-2 rounded-full bg-white"></div>
                         )}
@@ -2699,17 +4092,21 @@ export default function ParselensPage() {
                         <path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" strokeLinecap="round" strokeLinejoin="round"/>
                       </svg>
                     </div>
-                    <span className="text-white text-xs font-medium">İmar Baskısı</span>
+                    <div className="flex flex-col">
+                      <span className="text-white text-xs font-medium">İmar Baskısı</span>
+                      {!selectedIl && <span className="text-white/30 text-[9px]">Önce bir il seçin</span>}
+                    </div>
                   </label>
 
                   {/* İl Sınırları */}
-                  <label className="flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors border-b border-white/10">
+                  <label className={`flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors border-b border-white/10 ${imarBaskisi ? 'opacity-30 pointer-events-none' : ''}`}>
                     <div className="relative flex-shrink-0">
                       <input
                         type="checkbox"
                         checked={ilSinirlari}
                         onChange={(e) => setIlSinirlari(e.target.checked)}
                         className="sr-only peer"
+                        disabled={imarBaskisi}
                       />
                       <div className="w-4 h-4 rounded-full border-2 border-white/30 peer-checked:border-blue-500 peer-checked:bg-blue-500 transition-all duration-200 flex items-center justify-center">
                         {ilSinirlari && (
@@ -2723,16 +4120,18 @@ export default function ParselensPage() {
                       </svg>
                     </div>
                     <span className="text-white text-xs font-medium">İl Sınırları</span>
+                    {imarBaskisi && <span className="text-amber-400/60 text-[9px] ml-auto">İmar modu aktif</span>}
                   </label>
 
                   {/* İlçe Sınırları */}
-                  <label className="flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors">
+                  <label className={`flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors ${imarBaskisi ? 'opacity-30 pointer-events-none' : ''}`}>
                     <div className="relative flex-shrink-0">
                       <input
                         type="checkbox"
                         checked={ilceSinirlari}
                         onChange={(e) => setIlceSinirlari(e.target.checked)}
                         className="sr-only peer"
+                        disabled={imarBaskisi}
                       />
                       <div className="w-4 h-4 rounded-full border-2 border-white/30 peer-checked:border-blue-500 peer-checked:bg-blue-500 transition-all duration-200 flex items-center justify-center">
                         {ilceSinirlari && (
@@ -2749,47 +4148,129 @@ export default function ParselensPage() {
                       </svg>
                     </div>
                     <span className="text-white text-xs font-medium">İlçe Sınırları</span>
+                    {imarBaskisi && <span className="text-amber-400/60 text-[9px] ml-auto">İmar modu aktif</span>}
                   </label>
                 </div>
               )}
             </div>
             
             {/* Adres Arama Barı */}
-            <div className="relative flex-1 min-w-[200px] max-w-[320px]">
+            <div ref={searchContainerRef} className="relative flex-1 min-w-[200px] max-w-[320px]">
               <input
                 type="text"
-                placeholder="Adres ara..."
-                className="w-full pl-3 pr-9 py-2 bg-black/80 backdrop-blur-md border border-white/20 rounded-lg text-white text-xs placeholder-white/40 focus:outline-none focus:border-white/40 transition-all duration-200"
+                value={searchQuery}
+                onChange={(e) => handleSearchInput(e.target.value)}
+                onFocus={() => { if (searchResults.length > 0) setShowSearchResults(true); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && searchQuery.length >= 2) {
+                    searchAddress(searchQuery);
+                  }
+                  if (e.key === 'Escape') setShowSearchResults(false);
+                }}
+                placeholder="İl, ilçe, mahalle veya ada/parsel ara..."
+                className="w-full pl-4 pr-9 py-3 bg-black/80 backdrop-blur-md border border-white/20 rounded-lg text-white text-xs placeholder-white/40 focus:outline-none focus:border-white/40 transition-all duration-200"
               />
-              <button 
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 hover:bg-white/10 rounded-md transition-colors"
-                title="Konumumu Bul"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/60 hover:text-white">
-                  <circle cx="12" cy="12" r="10"></circle>
-                  <circle cx="12" cy="12" r="3"></circle>
-                  <line x1="12" y1="2" x2="12" y2="9"></line>
-                  <line x1="12" y1="15" x2="12" y2="22"></line>
-                  <line x1="2" y1="12" x2="9" y2="12"></line>
-                  <line x1="15" y1="12" x2="22" y2="12"></line>
-                </svg>
-              </button>
+              {searchLoading ? (
+                <div className="absolute right-2.5 top-1/2 -translate-y-1/2">
+                  <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
+                </div>
+              ) : (
+                <button 
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 hover:bg-white/10 rounded-md transition-colors"
+                  title="Ara"
+                  onClick={() => { if (searchQuery.length >= 2) searchAddress(searchQuery); }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/60 hover:text-white">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                  </svg>
+                </button>
+              )}
+
+              {/* Arama Sonuçları Dropdown - Google Style */}
+              {showSearchResults && searchResults.length > 0 && (
+                <div className="absolute top-full mt-1 left-0 right-0 bg-zinc-900/98 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl z-[999] overflow-hidden max-h-[380px] overflow-y-auto py-1"
+                     style={{ animation: 'fadeIn 0.12s ease-out' }}>
+                  {searchResults.map((result, i) => {
+                    if (result.source === 'backend') {
+                      const typeLabel = result.type === 'parsel' ? 'Parsel' : result.type === 'mahalle' ? 'Mahalle' : result.type === 'ilce' ? 'İlçe' : 'İl';
+                      return (
+                        <button key={`b-${i}`} onClick={() => handleSearchSelect(result)}
+                          className="w-full flex items-center gap-2.5 px-3.5 py-2 hover:bg-white/[0.06] transition-colors text-left outline-none focus:outline-none group">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-white/25 group-hover:text-white/40 flex-shrink-0 transition-colors">
+                            {result.type === 'parsel' ? (
+                              <><rect x="3" y="3" width="18" height="18" rx="2" strokeLinecap="round"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="12" y1="3" x2="12" y2="21"/></>
+                            ) : (
+                              <><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" strokeLinecap="round" strokeLinejoin="round"/><circle cx="12" cy="10" r="3"/></>
+                            )}
+                          </svg>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-white/90 text-[13px] truncate block">{result.display}</span>
+                            {result.type === 'parsel' && result.subtitle && (
+                              <span className="text-white/30 text-[10px] truncate block">{result.subtitle}</span>
+                            )}
+                          </div>
+                          <span className="flex-shrink-0 text-[10px] text-white/20 font-medium">{typeLabel}</span>
+                        </button>
+                      );
+                    }
+                    // Nominatim fallback
+                    const parts = (result.display_name || '').split(',');
+                    const title = parts[0]?.trim() || '';
+                    const subtitle = parts.slice(1, 3).join(',').trim();
+                    return (
+                      <button key={`n-${i}`} onClick={() => handleSearchSelect(result)}
+                        className="w-full flex items-center gap-2.5 px-3.5 py-2 hover:bg-white/[0.06] transition-colors text-left outline-none focus:outline-none group">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-white/25 group-hover:text-white/40 flex-shrink-0 transition-colors">
+                          <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" strokeLinecap="round" strokeLinejoin="round"/>
+                          <circle cx="12" cy="10" r="3"/>
+                        </svg>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-white/90 text-[13px] truncate block">{title}</span>
+                          <span className="text-white/30 text-[10px] truncate block">{subtitle}</span>
+                        </div>
+                        <span className="flex-shrink-0 text-[10px] text-white/20 font-medium">Adres</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
             
             {/* Filtreler Butonu */}
             <button 
               onClick={() => setIsFilterOpen(true)}
-              className="px-3 py-2 bg-black/80 backdrop-blur-md border border-white/20 rounded-lg text-white text-xs font-medium hover:bg-white/10 transition-all duration-200 flex items-center gap-1.5 flex-shrink-0 outline-none focus:outline-none"
+              className={`px-4 py-3 backdrop-blur-md border rounded-lg text-white text-xs font-medium hover:bg-white/10 transition-all duration-200 flex items-center gap-1.5 flex-shrink-0 outline-none focus:outline-none ${
+                trendKategori !== 'konut' 
+                  ? 'bg-blue-600/80 border-blue-400/40' 
+                  : 'bg-black/80 border-white/20'
+              }`}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="flex-shrink-0">
-                <path fillRule="evenodd" clipRule="evenodd" d="M4.95301 2.25C4.96862 2.25 4.98429 2.25 5.00001 2.25L19.047 2.25C19.7139 2.24997 20.2841 2.24994 20.7398 2.30742C21.2231 2.36839 21.6902 2.50529 22.0738 2.86524C22.4643 3.23154 22.6194 3.68856 22.6875 4.16405C22.7501 4.60084 22.7501 5.14397 22.75 5.76358L22.75 6.54012C22.75 7.02863 22.75 7.45095 22.7136 7.80311C22.6743 8.18206 22.5885 8.5376 22.3825 8.87893C22.1781 9.2177 21.9028 9.4636 21.5854 9.68404C21.2865 9.8917 20.9045 10.1067 20.4553 10.3596L17.5129 12.0159C16.8431 12.393 16.6099 12.5288 16.4542 12.6639C16.0966 12.9744 15.8918 13.3188 15.7956 13.7504C15.7545 13.9349 15.75 14.1672 15.75 14.8729L15.75 17.605C15.7501 18.5062 15.7501 19.2714 15.6574 19.8596C15.5587 20.4851 15.3298 21.0849 14.7298 21.4602C14.1434 21.827 13.4975 21.7933 12.8698 21.6442C12.2653 21.5007 11.5203 21.2094 10.6264 20.8599L10.5395 20.826C10.1208 20.6623 9.75411 20.519 9.46385 20.3691C9.1519 20.208 8.8622 20.0076 8.64055 19.6957C8.41641 19.3803 8.32655 19.042 8.28648 18.6963C8.24994 18.381 8.24997 18.0026 8.25 17.5806L8.25 14.8729C8.25 14.1672 8.24555 13.9349 8.20442 13.7504C8.1082 13.3188 7.90342 12.9744 7.54584 12.6639C7.39014 12.5288 7.15692 12.393 6.48714 12.0159L3.54471 10.3596C3.09549 10.1067 2.71353 9.8917 2.41458 9.68404C2.09724 9.4636 1.82191 9.2177 1.61747 8.87893C1.41148 8.5376 1.32571 8.18206 1.28645 7.80311C1.24996 7.45094 1.24998 7.02863 1.25 6.54012L1.25001 5.81466C1.25001 5.79757 1.25 5.78054 1.25 5.76357C1.24996 5.14396 1.24991 4.60084 1.31251 4.16405C1.38064 3.68856 1.53576 3.23154 1.92618 2.86524C2.30983 2.50529 2.77695 2.36839 3.26024 2.30742C3.71592 2.24994 4.28607 2.24997 4.95301 2.25ZM3.44796 3.79563C3.1143 3.83772 3.0082 3.90691 2.95251 3.95916C2.90359 4.00505 2.83904 4.08585 2.79734 4.37683C2.75181 4.69454 2.75001 5.12868 2.75001 5.81466V6.50448C2.75001 7.03869 2.75093 7.38278 2.77846 7.64854C2.8041 7.89605 2.84813 8.01507 2.90174 8.10391C2.9569 8.19532 3.0485 8.298 3.27034 8.45209C3.50406 8.61444 3.82336 8.79508 4.30993 9.06899L7.22296 10.7088C7.25024 10.7242 7.2771 10.7393 7.30357 10.7542C7.86227 11.0685 8.24278 11.2826 8.5292 11.5312C9.12056 12.0446 9.49997 12.6682 9.66847 13.424C9.75036 13.7913 9.75022 14.2031 9.75002 14.7845C9.75002 14.8135 9.75 14.843 9.75 14.8729V17.5424C9.75 18.0146 9.75117 18.305 9.77651 18.5236C9.79942 18.7213 9.83552 18.7878 9.8633 18.8269C9.89359 18.8695 9.95357 18.9338 10.152 19.0363C10.3644 19.146 10.6571 19.2614 11.1192 19.442C12.0802 19.8177 12.7266 20.0685 13.2164 20.1848C13.695 20.2985 13.8527 20.2396 13.9343 20.1885C14.0023 20.146 14.1073 20.0597 14.1757 19.626C14.2478 19.1686 14.25 18.5234 14.25 17.5424V14.8729C14.25 14.843 14.25 14.8135 14.25 14.7845C14.2498 14.2031 14.2496 13.7913 14.3315 13.424C14.5 12.6682 14.8794 12.0446 15.4708 11.5312C15.7572 11.2826 16.1377 11.0685 16.6964 10.7542C16.7229 10.7393 16.7498 10.7242 16.7771 10.7088L19.6901 9.06899C20.1767 8.79508 20.496 8.61444 20.7297 8.45209C20.9515 8.298 21.0431 8.19532 21.0983 8.10391C21.1519 8.01507 21.1959 7.89605 21.2215 7.64854C21.2491 7.38278 21.25 7.03869 21.25 6.50448V5.81466C21.25 5.12868 21.2482 4.69454 21.2027 4.37683C21.161 4.08585 21.0964 4.00505 21.0475 3.95916C20.9918 3.90691 20.8857 3.83772 20.5521 3.79563C20.2015 3.75141 19.727 3.75 19 3.75H5.00001C4.27297 3.75 3.79854 3.75141 3.44796 3.79563Z"/>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
+                <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
               </svg>
-              Filtreler
+              {trendKategori === 'konut' ? 'Filtreler' : propertyType}
             </button>
           </div>
           
           <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
           <style jsx global>{`
+            .exa-markdown { overflow-x: hidden; max-width: 100%; }
+            .exa-markdown p { margin: 0.25em 0; }
+            .exa-markdown strong { color: #fff; font-weight: 600; }
+            .exa-markdown em { color: rgba(255,255,255,0.7); font-style: italic; }
+            .exa-markdown ul, .exa-markdown ol { margin: 0.4em 0; padding-left: 1.2em; }
+            .exa-markdown li { margin: 0.15em 0; }
+            .exa-markdown li::marker { color: rgba(59,130,246,0.7); }
+            .exa-markdown h1, .exa-markdown h2, .exa-markdown h3 { color: #fff; font-weight: 700; margin: 0.5em 0 0.25em; }
+            .exa-markdown h1 { font-size: 1.1em; }
+            .exa-markdown h2 { font-size: 1.05em; }
+            .exa-markdown h3 { font-size: 1em; }
+            .exa-markdown code { background: rgba(255,255,255,0.08); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; color: #93c5fd; word-break: break-all; overflow-wrap: break-word; }
+            .exa-markdown pre { max-width: 100%; overflow-x: auto; }
+            .exa-markdown blockquote { border-left: 2px solid rgba(59,130,246,0.4); padding-left: 0.75em; margin: 0.4em 0; color: rgba(255,255,255,0.6); }
+            .exa-markdown a { color: #60a5fa; text-decoration: underline; }
+            .exa-markdown hr { border: none; border-top: 1px solid rgba(255,255,255,0.1); margin: 0.5em 0; }
             .leaflet-control-zoom {
               border: none !important;
               box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
@@ -2810,6 +4291,34 @@ export default function ParselensPage() {
             .leaflet-control-zoom a:last-child {
               border-radius: 0 0 8px 8px !important;
             }
+            .dark-tooltip {
+              background: rgba(10, 10, 10, 0.92) !important;
+              backdrop-filter: blur(12px) !important;
+              border: 1px solid rgba(255, 255, 255, 0.15) !important;
+              border-radius: 10px !important;
+              box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6) !important;
+              color: #fff !important;
+              padding: 0 !important;
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+            }
+            .dark-tooltip .leaflet-tooltip-content {
+              margin: 0 !important;
+            }
+            .dark-tooltip::before {
+              border-top-color: rgba(10, 10, 10, 0.92) !important;
+            }
+            .leaflet-tooltip-top.dark-tooltip::before {
+              border-top-color: rgba(10, 10, 10, 0.92) !important;
+            }
+            .leaflet-tooltip-bottom.dark-tooltip::before {
+              border-bottom-color: rgba(10, 10, 10, 0.92) !important;
+            }
+            .leaflet-tooltip-left.dark-tooltip::before {
+              border-left-color: rgba(10, 10, 10, 0.92) !important;
+            }
+            .leaflet-tooltip-right.dark-tooltip::before {
+              border-right-color: rgba(10, 10, 10, 0.92) !important;
+            }
           `}</style>
           <MapContainer
             center={[39.0, 35.0]} // Türkiye merkez koordinatları
@@ -2819,6 +4328,8 @@ export default function ParselensPage() {
             zoomControl={false}
             attributionControl={false}
           >
+            <MapRefSetter />
+            <MapResizer />
             <ZoomControl position="bottomleft" />
             <TileLayer
               url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
@@ -2826,23 +4337,62 @@ export default function ParselensPage() {
               maxZoom={20}
             />
             
-            {/* İl Sınırları */}
+            {/* Arama Pin Marker */}
+            {searchPin && (() => {
+              const L = typeof window !== 'undefined' ? require('leaflet') : null;
+              if (!L) return null;
+              const pinIcon = L.divIcon({
+                className: '',
+                html: `<div style="position:relative;width:30px;height:42px">
+                  <svg width="30" height="42" viewBox="0 0 30 42" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M15 0C6.72 0 0 6.72 0 15c0 10.5 15 27 15 27s15-16.5 15-27C30 6.72 23.28 0 15 0z" fill="#3B82F6"/>
+                    <circle cx="15" cy="14" r="6" fill="white"/>
+                  </svg>
+                </div>`,
+                iconSize: [30, 42],
+                iconAnchor: [15, 42],
+                popupAnchor: [0, -42]
+              });
+              return <Marker position={searchPin} icon={pinIcon} />;
+            })()}
+            
+            {/* İl Sınırları - Fiyata göre renklendirilmiş */}
             {ilSinirlari && illerGeoJSON && (
               <GeoJSON
-                key="il-sinirlari"
+                key={`il-sinirlari-${ilFiyatlari ? 'loaded' : 'default'}`}
                 data={illerGeoJSON}
-                style={(feature) => ({
-                  color: selectedIl === feature?.properties?.NAME_1 ? '#3b82f6' : '#10b981',
-                  weight: selectedIl === feature?.properties?.NAME_1 ? 3 : 2,
-                  opacity: 0.8,
-                  fillColor: selectedIl === feature?.properties?.NAME_1 ? '#3b82f6' : '#10b981',
-                  fillOpacity: selectedIl === feature?.properties?.NAME_1 ? 0.2 : 0.1
-                })}
+                style={(feature) => {
+                  const geoName = feature?.properties?.NAME_1 || '';
+                  const isSelected = selectedIl === geoName;
+                  const color = isSelected ? '#3b82f6' : getIlColor(geoName);
+                  return {
+                    color: isSelected ? '#3b82f6' : 'rgba(255,255,255,0.3)',
+                    weight: isSelected ? 3 : 1,
+                    opacity: isSelected ? 1 : 0.6,
+                    fillColor: color,
+                    fillOpacity: isSelected ? 0.5 : 0.45,
+                  };
+                }}
                 onEachFeature={(feature: any, layer: any) => {
                   if (feature.properties && feature.properties.NAME_1) {
                     const ilAdi = feature.properties.NAME_1;
+                    const priceData = getIlPrice(ilAdi);
                     
-                    layer.bindPopup(`<strong>${ilAdi}</strong><br/><small>Tıklayın: İlçeleri görüntüle</small>`);
+                    // Dark themed tooltip - dikdörtgen: sol il adı, sağ fiyat
+                    const fiyatHtml = priceData
+                      ? `<div style="text-align:right"><div style="font-size:14px;font-weight:700;color:#10b981;line-height:1.2">${formatNumber(priceData.m2_fiyat)} ₺/m²</div>${priceData.trend_12ay != null ? `<div style="font-size:10px;color:${priceData.trend_12ay >= 0 ? '#22c55e' : '#ef4444'};margin-top:1px">${priceData.trend_12ay >= 0 ? '+' : ''}%${priceData.trend_12ay.toFixed(1)}</div>` : ''}</div>`
+                      : '<div style="font-size:11px;color:rgba(255,255,255,0.4)">—</div>';
+                    
+                    layer.bindTooltip(
+                      `<div style="display:flex;align-items:center;gap:14px;padding:8px 14px;white-space:nowrap"><div style="font-size:13px;font-weight:600;color:#fff">${ilAdi}</div><div style="width:1px;height:24px;background:rgba(255,255,255,0.15)"></div>${fiyatHtml}</div>`,
+                      {
+                        className: 'dark-tooltip',
+                        sticky: true,
+                        direction: 'top',
+                        offset: [0, -10],
+                        opacity: 1,
+                      }
+                    );
                     
                     layer.on('click', () => {
                       handleIlClick(ilAdi, layer);
@@ -2850,15 +4400,17 @@ export default function ParselensPage() {
                     
                     layer.on('mouseover', () => {
                       layer.setStyle({
-                        fillOpacity: 0.3,
+                        fillOpacity: 0.65,
                         weight: 3
                       });
                     });
                     
                     layer.on('mouseout', () => {
+                      const baseColor = selectedIl === ilAdi ? '#3b82f6' : getIlColor(ilAdi);
                       layer.setStyle({
-                        fillOpacity: selectedIl === ilAdi ? 0.2 : 0.1,
-                        weight: selectedIl === ilAdi ? 3 : 2
+                        fillColor: baseColor,
+                        fillOpacity: selectedIl === ilAdi ? 0.5 : 0.45,
+                        weight: selectedIl === ilAdi ? 3 : 1
                       });
                     });
                   }
@@ -2866,75 +4418,390 @@ export default function ParselensPage() {
               />
             )}
             
-            {/* İlçe Sınırları */}
+            {/* İlçe Sınırları - Fiyata göre renklendirilmiş */}
             {ilceSinirlari && ilcelerGeoJSON && selectedIl && (
               <GeoJSON
-                key={`ilce-sinirlari-${selectedIl}`}
+                key={`ilce-sinirlari-${selectedIl}-${ilceFiyatlari ? 'loaded' : 'default'}`}
                 data={{
                   ...ilcelerGeoJSON,
                   features: ilcelerGeoJSON.features.filter((f: any) => 
                     f.properties?.NAME_1 === selectedIl
                   )
                 }}
-                style={{
-                  color: '#06b6d4',
-                  weight: 2,
-                  opacity: 0.8,
-                  fillColor: '#06b6d4',
-                  fillOpacity: 0.15
+                style={(feature) => {
+                  const ilceAdi = feature?.properties?.NAME_2 || '';
+                  const color = getIlceColor(ilceAdi);
+                  return {
+                    color: 'rgba(255,255,255,0.4)',
+                    weight: 1.5,
+                    opacity: 0.7,
+                    fillColor: color,
+                    fillOpacity: 0.5,
+                  };
                 }}
                 onEachFeature={(feature: any, layer: any) => {
                   if (feature.properties && feature.properties.NAME_2) {
-                    layer.bindPopup(`<strong>${feature.properties.NAME_2}</strong><br/>${feature.properties.NAME_1}`);
+                    const ilceAdi = feature.properties.NAME_2;
+                    const priceData = getIlcePrice(ilceAdi);
+                    
+                    const fiyatHtml = priceData
+                      ? `<div style="text-align:right"><div style="font-size:14px;font-weight:700;color:#10b981;line-height:1.2">${formatNumber(priceData.m2_fiyat)} ₺/m²</div></div>`
+                      : '<div style="font-size:11px;color:rgba(255,255,255,0.4)">—</div>';
+                    
+                    layer.bindTooltip(
+                      `<div style="display:flex;align-items:center;gap:14px;padding:8px 14px;white-space:nowrap"><div style="font-size:13px;font-weight:600;color:#fff">${ilceAdi}</div><div style="width:1px;height:24px;background:rgba(255,255,255,0.15)"></div>${fiyatHtml}</div>`,
+                      {
+                        className: 'dark-tooltip',
+                        sticky: true,
+                        direction: 'top',
+                        offset: [0, -10],
+                        opacity: 1,
+                      }
+                    );
                     
                     layer.on('mouseover', () => {
                       layer.setStyle({
-                        fillOpacity: 0.3,
+                        fillOpacity: 0.7,
                         weight: 3
                       });
                     });
                     
                     layer.on('mouseout', () => {
                       layer.setStyle({
-                        fillOpacity: 0.15,
-                        weight: 2
+                        fillColor: getIlceColor(ilceAdi),
+                        fillOpacity: 0.5,
+                        weight: 1.5
                       });
                     });
                   }
                 }}
               />
             )}
-            
-            {/* Marker - Sadece il seçildiğinde veya arama yapıldığında */}
-            {selectedIl && selectedIlCenter && (
-              <Marker position={selectedIlCenter}>
-                <Popup>
-                  <strong>{selectedIl}</strong>
-                </Popup>
-              </Marker>
-            )}
+
+            {/* İmar Baskısı - Parsel Katmanı (Viewport-based GeoJSON) */}
+            <ImarParcelsLayer il={selectedIl || ''} active={imarBaskisi && !!selectedIl} onParcelClick={handleParcelClick} />
+
+            {/* TKGM Tapu İşlem Hacmi Heatmap */}
+            <TapuHeatmapLayer il={selectedIl || ''} active={talepYogunlugu} />
           </MapContainer>
           
-          {/* Fiyat Skalası */}
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 w-[70%] max-w-md">
-            <div 
-              className="rounded-lg px-4 py-1.5"
+          {/* Fiyat Skalası / İmar Bilgi Barı + Exa Butonu */}
+          <div className="absolute bottom-4 right-4 z-20 flex items-stretch gap-3">
+            {talepYogunlugu ? (
+              /* Talep Yoğunluğu Heatmap Modu */
+              <div 
+                className="rounded-lg px-4 py-2 w-[400px]"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(13,71,161,0.15), rgba(213,0,0,0.15))',
+                  backdropFilter: 'blur(16px)',
+                  WebkitBackdropFilter: 'blur(16px)',
+                  border: '1px solid rgba(30,136,229,0.3)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)'
+                }}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#42a5f5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
+                      <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    <span className="text-blue-300 text-[10px] font-semibold">{selectedIl ? `${selectedIl} -` : ''} Tapu İşlem Hacmi Heatmap</span>
+                  </div>
+                  <button
+                    onClick={() => setTalepYogunlugu(false)}
+                    className="flex-shrink-0 p-1 rounded-md hover:bg-white/10 transition-colors"
+                    title="Heatmap'i kapat"
+                  >
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                  </button>
+                </div>
+                {/* Heatmap Renk Skalası */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-white/40 text-[9px] whitespace-nowrap">Az</span>
+                  <div className="flex-1 h-2 rounded-full overflow-hidden" style={{
+                    background: 'linear-gradient(to right, #0d47a1, #1e88e5, #43a047, #fdd835, #ff8f00, #f4511e, #d50000)'
+                  }} />
+                  <span className="text-white/40 text-[9px] whitespace-nowrap">Yoğun</span>
+                </div>
+                <div className="text-white/30 text-[8px] mt-1 text-center">TKGM tapu işlem hacmi yoğunluğu • Kaynak: Tapu ve Kadastro Genel Müdürlüğü</div>
+              </div>
+            ) : imarBaskisi && selectedIl ? (
+              /* İmar Modu Aktif - Baskı Legend */
+              <div 
+                className="rounded-lg px-4 py-2 w-[400px]"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(245,158,11,0.12), rgba(239,68,68,0.12))',
+                  backdropFilter: 'blur(16px)',
+                  WebkitBackdropFilter: 'blur(16px)',
+                  border: '1px solid rgba(245,158,11,0.25)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)'
+                }}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2">
+                    <img src="/icons/map-point-rotate.svg" alt="İmar" className="w-5 h-5 flex-shrink-0" style={{ filter: 'brightness(0) invert(1)' }} />
+                    <span className="text-amber-300 text-[10px] font-semibold">{selectedIl} - İmar Baskısı Analizi</span>
+                  </div>
+                  <button
+                    onClick={() => handleImarBaskisiToggle(false)}
+                    className="flex-shrink-0 p-1 rounded-md hover:bg-white/10 transition-colors"
+                    title="İmar modunu kapat"
+                  >
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                  </button>
+                </div>
+                {/* Baskı Renk Skalası */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-white/40 text-[9px] whitespace-nowrap">Düşük</span>
+                  <div className="flex-1 h-2 rounded-full overflow-hidden" style={{
+                    background: 'linear-gradient(to right, #22c55e, #84cc16, #eab308, #f59e0b, #f97316, #ef4444)'
+                  }} />
+                  <span className="text-white/40 text-[9px] whitespace-nowrap">Yüksek</span>
+                </div>
+                <div className="text-white/30 text-[8px] mt-1 text-center">Tarla/Ham Toprak parsellerdeki imar baskısı • Zoom 14+ yakınlaştırın</div>
+              </div>
+            ) : (
+              /* Normal Mod - Fiyat Skalası */
+              <div 
+                className="rounded-lg px-4 py-1.5 w-[400px]"
+                style={{
+                  background: 'rgba(0, 0, 0, 0.6)',
+                  backdropFilter: 'blur(16px)',
+                  WebkitBackdropFilter: 'blur(16px)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)'
+                }}
+              >
+                <h3 className="text-white/70 text-[10px] font-medium mb-1 text-center">{propertyType} m² Birim Fiyatı</h3>
+                <div className="flex items-center gap-2.5">
+                  <span className="text-white text-xs font-medium whitespace-nowrap">{formatNumber(priceMin)} ₺/m²</span>
+                  <div className="flex-1 h-2 rounded-full overflow-hidden" style={{
+                    background: 'linear-gradient(to right, #10b981, #22c55e, #84cc16, #eab308, #f59e0b, #f97316, #ef4444, #dc2626)'
+                  }}>
+                  </div>
+                  <span className="text-white text-xs font-medium whitespace-nowrap">{formatNumber(priceMax)} ₺/m²</span>
+                </div>
+              </div>
+            )}
+            {/* Exa Hızlı Analiz Butonu */}
+            <button
+              onClick={() => setIsExaChatOpen(!isExaChatOpen)}
+              className="flex items-center justify-center gap-2 px-4 rounded-lg transition-all duration-300 flex-shrink-0 group"
               style={{
-                background: 'rgba(0, 0, 0, 0.6)',
+                background: isExaChatOpen 
+                  ? 'linear-gradient(135deg, rgba(59,130,246,0.3), rgba(139,92,246,0.3))' 
+                  : 'rgba(0, 0, 0, 0.6)',
                 backdropFilter: 'blur(16px)',
                 WebkitBackdropFilter: 'blur(16px)',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)'
+                border: isExaChatOpen 
+                  ? '1px solid rgba(59,130,246,0.4)' 
+                  : '1px solid rgba(255, 255, 255, 0.1)',
+                boxShadow: isExaChatOpen 
+                  ? '0 4px 20px rgba(59,130,246,0.3)' 
+                  : '0 4px 16px rgba(0, 0, 0, 0.3)'
               }}
             >
-              <h3 className="text-white/70 text-[10px] font-medium mb-1 text-center">Konut m² Birim Fiyatı</h3>
-              <div className="flex items-center gap-2.5">
-                <span className="text-white text-xs font-medium whitespace-nowrap">16.329 ₺/m²</span>
-                <div className="flex-1 h-2 rounded-full overflow-hidden" style={{
-                  background: 'linear-gradient(to right, #10b981, #22c55e, #84cc16, #eab308, #f59e0b, #f97316, #ef4444, #dc2626)'
-                }}>
+              <Image
+                src="/icons/emlaxai-icon.svg"
+                alt="Exa"
+                width={20}
+                height={20}
+                style={{ objectFit: 'contain' }}
+              />
+              <span className="text-white text-xs font-semibold whitespace-nowrap">Exa Hızlı Analiz</span>
+            </button>
+          </div>
+
+          {/* Exa Chat Paneli */}
+          <div 
+            ref={chatContainerRef}
+            className="absolute left-0 right-0 bottom-0 z-30 overflow-hidden"
+            style={{
+              height: isExaChatOpen ? `${chatPanelHeight}%` : '0',
+              opacity: isExaChatOpen ? 1 : 0,
+              pointerEvents: isExaChatOpen ? 'auto' : 'none',
+              transition: chatResizing.current ? 'none' : 'height 0.4s cubic-bezier(0.4,0,0.2,1), opacity 0.4s ease',
+            }}
+          >
+            <div 
+              className="w-full h-full flex flex-col"
+              style={{
+                background: 'rgba(0, 0, 0, 0.75)',
+                backdropFilter: 'blur(20px) saturate(120%)',
+                WebkitBackdropFilter: 'blur(20px) saturate(120%)',
+                borderTop: '1px solid rgba(255,255,255,0.12)',
+                boxShadow: '0 -8px 32px rgba(0, 0, 0, 0.4)',
+              }}
+            >
+              {/* Resize Handle - Sürükle */}
+              <div 
+                className="flex items-center justify-center cursor-ns-resize group shrink-0"
+                style={{ height: '10px' }}
+                onMouseDown={handleChatResizeStart}
+                onTouchStart={handleChatResizeStart}
+              >
+                <div className="w-10 h-1 rounded-full bg-white/15 group-hover:bg-white/35 group-active:bg-blue-400/60 transition-colors" />
+              </div>
+
+              {/* Chat Header */}
+              <div className="flex items-center justify-between px-5 py-2 border-b border-white/8 shrink-0">
+                <div className="flex items-center gap-3">
+                  <Image
+                    src="/icons/emlaxai-icon.svg"
+                    alt="Exa"
+                    width={22}
+                    height={22}
+                    className="flex-shrink-0"
+                    style={{ objectFit: 'contain', position: 'relative', top: '-7px' }}
+                  />
+                  <div>
+                    <h3 className="text-white text-sm font-semibold leading-none">Exa Hızlı Analiz</h3>
+                    <p className="text-white/40 text-[10px] leading-none mt-1">
+                      {selectedIl ? `${selectedIl} bölgesi analiz ediliyor` : 'Türkiye geneli emlak analizi'}
+                    </p>
+                  </div>
                 </div>
-                <span className="text-white text-xs font-medium whitespace-nowrap">77.319 ₺/m²</span>
+                <div className="flex items-center gap-1">
+                  {/* Küçült */}
+                  <button
+                    onClick={() => setChatPanelHeight(30)}
+                    title="Küçük"
+                    className={`p-1.5 rounded-lg transition-colors ${chatPanelHeight <= 35 ? 'bg-white/10 text-white' : 'text-white/40 hover:bg-white/10 hover:text-white/70'}`}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="7 13 12 18 17 13"></polyline>
+                      <line x1="12" y1="2" x2="12" y2="18"></line>
+                    </svg>
+                  </button>
+                  {/* Orta */}
+                  <button
+                    onClick={() => setChatPanelHeight(55)}
+                    title="Orta"
+                    className={`p-1.5 rounded-lg transition-colors ${chatPanelHeight > 35 && chatPanelHeight < 75 ? 'bg-white/10 text-white' : 'text-white/40 hover:bg-white/10 hover:text-white/70'}`}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="7" width="18" height="10" rx="2"></rect>
+                    </svg>
+                  </button>
+                  {/* Tam ekran */}
+                  <button
+                    onClick={() => setChatPanelHeight(88)}
+                    title="Tam ekran"
+                    className={`p-1.5 rounded-lg transition-colors ${chatPanelHeight >= 75 ? 'bg-white/10 text-white' : 'text-white/40 hover:bg-white/10 hover:text-white/70'}`}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="15 3 21 3 21 9"></polyline>
+                      <polyline points="9 21 3 21 3 15"></polyline>
+                      <line x1="21" y1="3" x2="14" y2="10"></line>
+                      <line x1="3" y1="21" x2="10" y2="14"></line>
+                    </svg>
+                  </button>
+                  {/* Ayırıcı */}
+                  <div className="w-px h-4 bg-white/10 mx-1" />
+                  {/* Kapat */}
+                  <button 
+                    onClick={() => setIsExaChatOpen(false)}
+                    title="Kapat"
+                    className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-white/40 hover:text-white"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="6 15 12 9 18 15"></polyline>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              {/* Chat Mesajları */}
+              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+                {exaChatMessages.length === 0 && (
+                  <div className="flex flex-col items-center justify-center h-full text-center">
+                    <Image
+                      src="/icons/emlaxai-icon.svg"
+                      alt="Exa"
+                      width={40}
+                      height={40}
+                      style={{ objectFit: 'contain', opacity: 0.3 }}
+                    />
+                    <p className="text-white/30 text-sm mt-3">Emlak hakkında bir soru sorun</p>
+                    <div className="flex flex-wrap gap-2 mt-4 justify-center max-w-md">
+                      {[
+                        selectedIl ? `${selectedIl}'da m² fiyat trendi nasıl?` : 'En çok değerlenen iller hangileri?',
+                        selectedIl ? `${selectedIl}'da yatırım yapmalı mıyım?` : 'Kira getirisi en yüksek iller?',
+                        'Konut piyasası 2026 beklentileri?'
+                      ].map((q, i) => (
+                        <button
+                          key={i}
+                          onClick={() => { setExaChatInput(q); }}
+                          className="px-3 py-1.5 rounded-full text-[11px] text-white/50 border border-white/10 hover:border-white/25 hover:text-white/70 transition-all"
+                        >
+                          {q}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {exaChatMessages.map((msg, i) => (
+                  <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    {msg.role === 'user' ? (
+                      <div className="max-w-[75%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed bg-blue-500/20 text-white border border-blue-500/20">
+                        {msg.content}
+                      </div>
+                    ) : (
+                      <div className="max-w-[85%] text-sm leading-relaxed text-white/85">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <Image src="/icons/emlaxai-icon.svg" alt="Exa" width={14} height={14} style={{ objectFit: 'contain' }} />
+                          <span className="text-[10px] text-white/40 font-medium">Exa</span>
+                        </div>
+                        <ExaMarkdown compact>{msg.content}</ExaMarkdown>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {exaChatLoading && (
+                  <div className="flex justify-start">
+                    <div className="flex items-center gap-2">
+                      <div className="flex gap-1">
+                        <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                        <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                        <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                      </div>
+                      <span className="text-white/30 text-xs">Exa düşünüyor...</span>
+                    </div>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              {/* Chat Input */}
+              <div className="px-5 py-3 border-t border-white/8">
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={exaChatInput}
+                    onChange={(e) => setExaChatInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleExaChatSend()}
+                    placeholder="Emlak hakkında bir şey sorun..."
+                    className="w-full bg-white/5 border border-white/10 rounded-xl pl-4 pr-12 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-white/25 transition-colors"
+                  />
+                  <button
+                    onClick={handleExaChatSend}
+                    disabled={!exaChatInput.trim() || exaChatLoading}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 transition-all disabled:opacity-30 disabled:cursor-not-allowed hover:scale-110"
+                  >
+                    <Image
+                      src="/icons/send-prompt.svg"
+                      alt="Gönder"
+                      width={28}
+                      height={28}
+                      style={{ objectFit: 'contain' }}
+                    />
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -2968,6 +4835,31 @@ export default function ParselensPage() {
           .leaflet-control-zoom a:last-child {
             border-radius: 0 0 8px 8px !important;
           }
+          .dark-tooltip {
+            background: rgba(10, 10, 10, 0.92) !important;
+            backdrop-filter: blur(12px) !important;
+            border: 1px solid rgba(255, 255, 255, 0.15) !important;
+            border-radius: 10px !important;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6) !important;
+            color: #fff !important;
+            padding: 0 !important;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+          }
+          .dark-tooltip::before {
+            border-top-color: rgba(10, 10, 10, 0.92) !important;
+          }
+          .leaflet-tooltip-top.dark-tooltip::before {
+            border-top-color: rgba(10, 10, 10, 0.92) !important;
+          }
+          .leaflet-tooltip-bottom.dark-tooltip::before {
+            border-bottom-color: rgba(10, 10, 10, 0.92) !important;
+          }
+          .leaflet-tooltip-left.dark-tooltip::before {
+            border-left-color: rgba(10, 10, 10, 0.92) !important;
+          }
+          .leaflet-tooltip-right.dark-tooltip::before {
+            border-right-color: rgba(10, 10, 10, 0.92) !important;
+          }
         `}</style>
         <MapContainer
           center={[39.0, 35.0]}
@@ -2977,6 +4869,8 @@ export default function ParselensPage() {
           zoomControl={false}
           attributionControl={false}
         >
+          <MapRefSetter />
+          <MapResizer />
           <ZoomControl position="bottomleft" />
           <TileLayer
             url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
@@ -2984,23 +4878,54 @@ export default function ParselensPage() {
             maxZoom={20}
           />
           
-          {/* İl Sınırları */}
+          {/* Arama Pin Marker (Mobil) */}
+          {searchPin && (() => {
+            const L = typeof window !== 'undefined' ? require('leaflet') : null;
+            if (!L) return null;
+            const pinIcon = L.divIcon({
+              className: '',
+              html: `<div style="position:relative;width:30px;height:42px"><svg width="30" height="42" viewBox="0 0 30 42" fill="none"><path d="M15 0C6.72 0 0 6.72 0 15c0 10.5 15 27 15 27s15-16.5 15-27C30 6.72 23.28 0 15 0z" fill="#3B82F6"/><circle cx="15" cy="14" r="6" fill="white"/></svg></div>`,
+              iconSize: [30, 42], iconAnchor: [15, 42]
+            });
+            return <Marker position={searchPin} icon={pinIcon} />;
+          })()}
+          
+          {/* İl Sınırları - Fiyata göre renklendirilmiş */}
           {ilSinirlari && illerGeoJSON && (
             <GeoJSON
-              key="il-sinirlari-mobile"
+              key={`il-sinirlari-mobile-${ilFiyatlari ? 'loaded' : 'default'}`}
               data={illerGeoJSON}
-              style={(feature) => ({
-                color: selectedIl === feature?.properties?.NAME_1 ? '#3b82f6' : '#10b981',
-                weight: selectedIl === feature?.properties?.NAME_1 ? 3 : 2,
-                opacity: 0.8,
-                fillColor: selectedIl === feature?.properties?.NAME_1 ? '#3b82f6' : '#10b981',
-                fillOpacity: selectedIl === feature?.properties?.NAME_1 ? 0.2 : 0.1
-              })}
+              style={(feature) => {
+                const geoName = feature?.properties?.NAME_1 || '';
+                const isSelected = selectedIl === geoName;
+                const color = isSelected ? '#3b82f6' : getIlColor(geoName);
+                return {
+                  color: isSelected ? '#3b82f6' : 'rgba(255,255,255,0.3)',
+                  weight: isSelected ? 3 : 1,
+                  opacity: isSelected ? 1 : 0.6,
+                  fillColor: color,
+                  fillOpacity: isSelected ? 0.5 : 0.45,
+                };
+              }}
               onEachFeature={(feature: any, layer: any) => {
                 if (feature.properties && feature.properties.NAME_1) {
                   const ilAdi = feature.properties.NAME_1;
+                  const priceData = getIlPrice(ilAdi);
                   
-                  layer.bindPopup(`<strong>${ilAdi}</strong><br/><small>Tıklayın: İlçeleri görüntüle</small>`);
+                  const fiyatHtml = priceData
+                    ? `<div style="text-align:right"><div style="font-size:14px;font-weight:700;color:#10b981;line-height:1.2">${formatNumber(priceData.m2_fiyat)} ₺/m²</div>${priceData.trend_12ay != null ? `<div style="font-size:10px;color:${priceData.trend_12ay >= 0 ? '#22c55e' : '#ef4444'};margin-top:1px">${priceData.trend_12ay >= 0 ? '+' : ''}%${priceData.trend_12ay.toFixed(1)}</div>` : ''}</div>`
+                    : '<div style="font-size:11px;color:rgba(255,255,255,0.4)">—</div>';
+                  
+                  layer.bindTooltip(
+                    `<div style="display:flex;align-items:center;gap:14px;padding:8px 14px;white-space:nowrap"><div style="font-size:13px;font-weight:600;color:#fff">${ilAdi}</div><div style="width:1px;height:24px;background:rgba(255,255,255,0.15)"></div>${fiyatHtml}</div>`,
+                    {
+                      className: 'dark-tooltip',
+                      sticky: true,
+                      direction: 'top',
+                      offset: [0, -10],
+                      opacity: 1,
+                    }
+                  );
                   
                   layer.on('click', () => {
                     handleIlClick(ilAdi, layer);
@@ -3008,15 +4933,17 @@ export default function ParselensPage() {
                   
                   layer.on('mouseover', () => {
                     layer.setStyle({
-                      fillOpacity: 0.3,
+                      fillOpacity: 0.65,
                       weight: 3
                     });
                   });
                   
                   layer.on('mouseout', () => {
+                    const baseColor = selectedIl === ilAdi ? '#3b82f6' : getIlColor(ilAdi);
                     layer.setStyle({
-                      fillOpacity: selectedIl === ilAdi ? 0.2 : 0.1,
-                      weight: selectedIl === ilAdi ? 3 : 2
+                      fillColor: baseColor,
+                      fillOpacity: selectedIl === ilAdi ? 0.5 : 0.45,
+                      weight: selectedIl === ilAdi ? 3 : 1
                     });
                   });
                 }
@@ -3024,59 +4951,77 @@ export default function ParselensPage() {
             />
           )}
           
-          {/* İlçe Sınırları */}
+          {/* İlçe Sınırları - Fiyata göre renklendirilmiş */}
           {ilceSinirlari && ilcelerGeoJSON && selectedIl && (
             <GeoJSON
-              key={`ilce-sinirlari-mobile-${selectedIl}`}
+              key={`ilce-sinirlari-mobile-${selectedIl}-${ilceFiyatlari ? 'loaded' : 'default'}`}
               data={{
                 ...ilcelerGeoJSON,
                 features: ilcelerGeoJSON.features.filter((f: any) => 
                   f.properties?.NAME_1 === selectedIl
                 )
               }}
-              style={{
-                color: '#06b6d4',
-                weight: 2,
-                opacity: 0.8,
-                fillColor: '#06b6d4',
-                fillOpacity: 0.15
+              style={(feature) => {
+                const ilceAdi = feature?.properties?.NAME_2 || '';
+                const color = getIlceColor(ilceAdi);
+                return {
+                  color: 'rgba(255,255,255,0.4)',
+                  weight: 1.5,
+                  opacity: 0.7,
+                  fillColor: color,
+                  fillOpacity: 0.5,
+                };
               }}
               onEachFeature={(feature: any, layer: any) => {
                 if (feature.properties && feature.properties.NAME_2) {
-                  layer.bindPopup(`<strong>${feature.properties.NAME_2}</strong><br/>${feature.properties.NAME_1}`);
+                  const ilceAdi = feature.properties.NAME_2;
+                  const priceData = getIlcePrice(ilceAdi);
+                  
+                  const fiyatHtml = priceData
+                    ? `<div style="text-align:right"><div style="font-size:14px;font-weight:700;color:#10b981;line-height:1.2">${formatNumber(priceData.m2_fiyat)} ₺/m²</div></div>`
+                    : '<div style="font-size:11px;color:rgba(255,255,255,0.4)">—</div>';
+                  
+                  layer.bindTooltip(
+                    `<div style="display:flex;align-items:center;gap:14px;padding:8px 14px;white-space:nowrap"><div style="font-size:13px;font-weight:600;color:#fff">${ilceAdi}</div><div style="width:1px;height:24px;background:rgba(255,255,255,0.15)"></div>${fiyatHtml}</div>`,
+                    {
+                      className: 'dark-tooltip',
+                      sticky: true,
+                      direction: 'top',
+                      offset: [0, -10],
+                      opacity: 1,
+                    }
+                  );
                   
                   layer.on('mouseover', () => {
                     layer.setStyle({
-                      fillOpacity: 0.3,
+                      fillOpacity: 0.7,
                       weight: 3
                     });
                   });
                   
                   layer.on('mouseout', () => {
                     layer.setStyle({
-                      fillOpacity: 0.15,
-                      weight: 2
+                      fillColor: getIlceColor(ilceAdi),
+                      fillOpacity: 0.5,
+                      weight: 1.5
                     });
                   });
                 }
               }}
             />
           )}
-          
-          {/* Marker - Sadece il seçildiğinde veya arama yapıldığında */}
-          {selectedIl && selectedIlCenter && (
-            <Marker position={selectedIlCenter}>
-              <Popup>
-                <strong>{selectedIl}</strong>
-              </Popup>
-            </Marker>
-          )}
+
+          {/* İmar Baskısı - Parsel Katmanı (Mobil - Viewport-based GeoJSON) */}
+          <ImarParcelsLayer il={selectedIl || ''} active={imarBaskisi && !!selectedIl} onParcelClick={handleParcelClick} />
+
+          {/* TKGM Tapu İşlem Hacmi Heatmap (Mobil) */}
+          <TapuHeatmapLayer il={selectedIl || ''} active={talepYogunlugu} />
         </MapContainer>
         
-        {/* Fiyat Skalası - Mobile */}
-        <div className="absolute bottom-20 left-4 right-4 z-20">
+        {/* Fiyat Skalası + Exa Butonu - Mobile */}
+        <div className="absolute bottom-20 left-4 right-4 z-20 flex items-end gap-2">
           <div 
-            className="rounded-lg px-3 py-1.5"
+            className="flex-1 rounded-lg px-3 py-1.5"
             style={{
               background: 'rgba(0, 0, 0, 0.6)',
               backdropFilter: 'blur(16px)',
@@ -3085,14 +5030,176 @@ export default function ParselensPage() {
               boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)'
             }}
           >
-            <h3 className="text-white/70 text-[9px] font-medium mb-0.5 text-center">Konut m² Birim Fiyatı</h3>
+            <h3 className="text-white/70 text-[9px] font-medium mb-0.5 text-center">{propertyType} m² Birim Fiyatı</h3>
             <div className="flex items-center gap-2">
-              <span className="text-white text-[10px] font-medium whitespace-nowrap">16.329 ₺</span>
+              <span className="text-white text-[10px] font-medium whitespace-nowrap">{formatNumber(priceMin)} ₺</span>
               <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{
                 background: 'linear-gradient(to right, #10b981, #22c55e, #84cc16, #eab308, #f59e0b, #f97316, #ef4444, #dc2626)'
               }}>
               </div>
-              <span className="text-white text-[10px] font-medium whitespace-nowrap">77.319 ₺</span>
+              <span className="text-white text-[10px] font-medium whitespace-nowrap">{formatNumber(priceMax)} ₺</span>
+            </div>
+          </div>
+          {/* Exa Hızlı Analiz Butonu - Mobile */}
+          <button
+            onClick={() => setIsExaChatOpen(!isExaChatOpen)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg transition-all duration-300 flex-shrink-0"
+            style={{
+              background: isExaChatOpen 
+                ? 'linear-gradient(135deg, rgba(59,130,246,0.3), rgba(139,92,246,0.3))' 
+                : 'rgba(0, 0, 0, 0.6)',
+              backdropFilter: 'blur(16px)',
+              WebkitBackdropFilter: 'blur(16px)',
+              border: isExaChatOpen 
+                ? '1px solid rgba(59,130,246,0.4)' 
+                : '1px solid rgba(255, 255, 255, 0.1)',
+              boxShadow: isExaChatOpen 
+                ? '0 4px 20px rgba(59,130,246,0.3)' 
+                : '0 4px 16px rgba(0, 0, 0, 0.3)'
+            }}
+          >
+            <Image
+              src="/icons/emlaxai-icon.svg"
+              alt="Exa"
+              width={18}
+              height={18}
+              style={{ objectFit: 'contain' }}
+            />
+            <span className="text-white text-[10px] font-semibold whitespace-nowrap">Exa</span>
+          </button>
+        </div>
+
+        {/* Exa Chat Paneli - Mobile */}
+        <div 
+          className="absolute left-0 right-0 bottom-0 z-30 transition-all duration-500 ease-in-out overflow-hidden"
+          style={{
+            height: isExaChatOpen ? '60%' : '0',
+            opacity: isExaChatOpen ? 1 : 0,
+            pointerEvents: isExaChatOpen ? 'auto' : 'none',
+          }}
+        >
+          <div 
+            className="w-full h-full flex flex-col"
+            style={{
+              background: 'rgba(0, 0, 0, 0.75)',
+              backdropFilter: 'blur(20px) saturate(120%)',
+              WebkitBackdropFilter: 'blur(20px) saturate(120%)',
+              borderTop: '1px solid rgba(255,255,255,0.12)',
+              boxShadow: '0 -8px 32px rgba(0, 0, 0, 0.4)',
+            }}
+          >
+            {/* Chat Header - Mobile */}
+            <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/8">
+              <div className="flex items-center gap-2">
+                <Image
+                  src="/icons/emlaxai-icon.svg"
+                  alt="Exa"
+                  width={18}
+                  height={18}
+                  className="flex-shrink-0"
+                  style={{ objectFit: 'contain', position: 'relative', top: '-7px' }}
+                />
+                <div>
+                  <h3 className="text-white text-xs font-semibold leading-none">Exa Hızlı Analiz</h3>
+                  <p className="text-white/40 text-[9px] leading-none mt-0.5">
+                    {selectedIl ? `${selectedIl} analizi` : 'Türkiye geneli'}
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setIsExaChatOpen(false)}
+                className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-white/50 hover:text-white"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="6 15 12 9 18 15"></polyline>
+                </svg>
+              </button>
+            </div>
+
+            {/* Chat Mesajları - Mobile */}
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+              {exaChatMessages.length === 0 && (
+                <div className="flex flex-col items-center justify-center h-full text-center">
+                  <Image
+                    src="/icons/emlaxai-icon.svg"
+                    alt="Exa"
+                    width={32}
+                    height={32}
+                    style={{ objectFit: 'contain', opacity: 0.3 }}
+                  />
+                  <p className="text-white/30 text-xs mt-2">Emlak hakkında bir soru sorun</p>
+                  <div className="flex flex-wrap gap-1.5 mt-3 justify-center">
+                    {[
+                      selectedIl ? `${selectedIl} fiyat trendi?` : 'En değerli iller?',
+                      'Kira getirisi?',
+                    ].map((q, i) => (
+                      <button
+                        key={i}
+                        onClick={() => { setExaChatInput(q); }}
+                        className="px-2.5 py-1 rounded-full text-[10px] text-white/50 border border-white/10 hover:border-white/25 hover:text-white/70 transition-all"
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {exaChatMessages.map((msg, i) => (
+                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  {msg.role === 'user' ? (
+                    <div className="max-w-[80%] px-3 py-2 rounded-2xl text-xs leading-relaxed bg-blue-500/20 text-white border border-blue-500/20">
+                      {msg.content}
+                    </div>
+                  ) : (
+                    <div className="max-w-[85%] text-xs leading-relaxed text-white/85">
+                      <div className="flex items-center gap-1 mb-1">
+                        <Image src="/icons/emlaxai-icon.svg" alt="Exa" width={12} height={12} style={{ objectFit: 'contain' }} />
+                        <span className="text-[9px] text-white/40 font-medium">Exa</span>
+                      </div>
+                      <ExaMarkdown compact>{msg.content}</ExaMarkdown>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {exaChatLoading && (
+                <div className="flex justify-start">
+                  <div className="flex items-center gap-2">
+                    <div className="flex gap-1">
+                      <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                      <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                      <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                    </div>
+                    <span className="text-white/30 text-[10px]">Exa düşünüyor...</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Chat Input - Mobile */}
+            <div className="px-4 py-2.5 border-t border-white/8">
+              <div className="relative">
+                <input
+                  type="text"
+                  value={exaChatInput}
+                  onChange={(e) => setExaChatInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleExaChatSend()}
+                  placeholder="Bir şey sorun..."
+                  className="w-full bg-white/5 border border-white/10 rounded-xl pl-3 pr-10 py-2 text-xs text-white placeholder-white/30 focus:outline-none focus:border-white/25 transition-colors"
+                />
+                <button
+                  onClick={handleExaChatSend}
+                  disabled={!exaChatInput.trim() || exaChatLoading}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 transition-all disabled:opacity-30 disabled:cursor-not-allowed hover:scale-110"
+                >
+                  <Image
+                    src="/icons/send-prompt.svg"
+                    alt="Gönder"
+                    width={24}
+                    height={24}
+                    style={{ objectFit: 'contain' }}
+                  />
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -3102,7 +5209,12 @@ export default function ParselensPage() {
       <MobileSidebar isOpen={isMobileSidebarOpen} onClose={() => setIsMobileSidebarOpen(false)} />
 
       {/* Filter Popup */}
-      <FilterPopup isOpen={isFilterOpen} onClose={() => setIsFilterOpen(false)} />
+      <FilterPopup 
+        isOpen={isFilterOpen} 
+        onClose={() => setIsFilterOpen(false)} 
+        onApply={handleFiltersApply}
+        initialValues={{ category: trendKategori as any, tip: 'satilik' }}
+      />
 
       {/* Üst Bar - Hamburger + Arama + Filtre */}
       <div className="fixed top-4 left-4 right-4 z-30 flex items-center justify-center gap-2">
@@ -3119,22 +5231,67 @@ export default function ParselensPage() {
         </button>
 
         {/* Orta - Arama Kutusu */}
-        <div className="relative flex-1 max-w-xs">
+        <div ref={mobileSearchContainerRef} className="relative flex-1 max-w-xs">
           <input
             type="text"
-            placeholder="Adres ara..."
+            value={searchQuery}
+            onChange={(e) => handleSearchInput(e.target.value)}
+            onFocus={() => { if (searchResults.length > 0) setShowSearchResults(true); }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && searchQuery.length >= 2) searchAddress(searchQuery);
+              if (e.key === 'Escape') setShowSearchResults(false);
+            }}
+            placeholder="İl, ilçe, mahalle, ada/parsel..."
             className="w-full pl-3 pr-9 py-2 bg-black/80 backdrop-blur-md border border-white/20 rounded-lg text-white text-xs placeholder-white/40 focus:outline-none focus:border-white/40"
           />
-          <button className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 hover:bg-white/10 rounded-md">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/60">
-              <circle cx="12" cy="12" r="10"></circle>
-              <circle cx="12" cy="12" r="3"></circle>
-              <line x1="12" y1="2" x2="12" y2="9"></line>
-              <line x1="12" y1="15" x2="12" y2="22"></line>
-              <line x1="2" y1="12" x2="9" y2="12"></line>
-              <line x1="15" y1="12" x2="22" y2="12"></line>
-            </svg>
-          </button>
+          {searchLoading ? (
+            <div className="absolute right-2 top-1/2 -translate-y-1/2">
+              <div className="w-3 h-3 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
+            </div>
+          ) : (
+            <button 
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 hover:bg-white/10 rounded-md"
+              onClick={() => { if (searchQuery.length >= 2) searchAddress(searchQuery); }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/60">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+            </button>
+          )}
+
+          {/* Mobil Arama Sonuçları - Google Style */}
+          {showSearchResults && searchResults.length > 0 && (
+            <div className="absolute top-full mt-1 left-0 right-0 bg-zinc-900/98 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl z-[999] overflow-hidden max-h-[50vh] overflow-y-auto py-1">
+              {searchResults.map((result, i) => {
+                if (result.source === 'backend') {
+                  const typeLabel = result.type === 'parsel' ? 'Parsel' : result.type === 'mahalle' ? 'Mahalle' : result.type === 'ilce' ? 'İlçe' : 'İl';
+                  return (
+                    <button key={`mb-${i}`} onClick={() => handleSearchSelect(result)}
+                      className="w-full flex items-center gap-2 px-3 py-2 hover:bg-white/[0.06] transition-colors text-left outline-none focus:outline-none">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-white/25 flex-shrink-0">
+                        <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" strokeLinecap="round" strokeLinejoin="round"/><circle cx="12" cy="10" r="3"/>
+                      </svg>
+                      <span className="text-white/90 text-[12px] truncate flex-1">{result.display}</span>
+                      <span className="text-[9px] text-white/20 flex-shrink-0">{typeLabel}</span>
+                    </button>
+                  );
+                }
+                const parts = (result.display_name || '').split(',');
+                const title = parts[0]?.trim() || '';
+                return (
+                  <button key={`mn-${i}`} onClick={() => handleSearchSelect(result)}
+                    className="w-full flex items-center gap-2 px-3 py-2 hover:bg-white/[0.06] transition-colors text-left outline-none focus:outline-none">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-white/25 flex-shrink-0">
+                      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" strokeLinecap="round" strokeLinejoin="round"/><circle cx="12" cy="10" r="3"/>
+                    </svg>
+                    <span className="text-white/90 text-[12px] truncate flex-1">{title}</span>
+                    <span className="text-[9px] text-white/20 flex-shrink-0">Adres</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Sağ - Filtre */}
@@ -3189,15 +5346,16 @@ export default function ParselensPage() {
             </label>
 
             {/* İmar Baskısı */}
-            <label className="flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors border-b border-white/10">
+            <label className={`flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors border-b border-white/10 ${!selectedIl ? 'opacity-40 pointer-events-none' : ''}`}>
               <div className="relative flex-shrink-0">
                 <input
                   type="checkbox"
                   checked={imarBaskisi}
-                  onChange={(e) => setImarBaskisi(e.target.checked)}
+                  onChange={(e) => handleImarBaskisiToggle(e.target.checked)}
                   className="sr-only peer"
+                  disabled={!selectedIl}
                 />
-                <div className="w-4 h-4 rounded-full border-2 border-white/30 peer-checked:border-blue-500 peer-checked:bg-blue-500 transition-all duration-200 flex items-center justify-center">
+                <div className="w-4 h-4 rounded-full border-2 border-white/30 peer-checked:border-amber-500 peer-checked:bg-amber-500 transition-all duration-200 flex items-center justify-center">
                   {imarBaskisi && (
                     <div className="w-2 h-2 rounded-full bg-white"></div>
                   )}
@@ -3208,17 +5366,21 @@ export default function ParselensPage() {
                   <path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </div>
-              <span className="text-white text-xs font-medium">İmar Baskısı</span>
+              <div className="flex flex-col">
+                <span className="text-white text-xs font-medium">İmar Baskısı</span>
+                {!selectedIl && <span className="text-white/30 text-[9px]">Önce bir il seçin</span>}
+              </div>
             </label>
 
             {/* İl Sınırları */}
-            <label className="flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors border-b border-white/10">
+            <label className={`flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors border-b border-white/10 ${imarBaskisi ? 'opacity-30 pointer-events-none' : ''}`}>
               <div className="relative flex-shrink-0">
                 <input
                   type="checkbox"
                   checked={ilSinirlari}
                   onChange={(e) => setIlSinirlari(e.target.checked)}
                   className="sr-only peer"
+                  disabled={imarBaskisi}
                 />
                 <div className="w-4 h-4 rounded-full border-2 border-white/30 peer-checked:border-blue-500 peer-checked:bg-blue-500 transition-all duration-200 flex items-center justify-center">
                   {ilSinirlari && (
@@ -3232,16 +5394,18 @@ export default function ParselensPage() {
                 </svg>
               </div>
               <span className="text-white text-xs font-medium">İl Sınırları</span>
+              {imarBaskisi && <span className="text-amber-400/60 text-[9px] ml-auto">İmar modu aktif</span>}
             </label>
 
             {/* İlçe Sınırları */}
-            <label className="flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors">
+            <label className={`flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors ${imarBaskisi ? 'opacity-30 pointer-events-none' : ''}`}>
               <div className="relative flex-shrink-0">
                 <input
                   type="checkbox"
                   checked={ilceSinirlari}
                   onChange={(e) => setIlceSinirlari(e.target.checked)}
                   className="sr-only peer"
+                  disabled={imarBaskisi}
                 />
                 <div className="w-4 h-4 rounded-full border-2 border-white/30 peer-checked:border-blue-500 peer-checked:bg-blue-500 transition-all duration-200 flex items-center justify-center">
                   {ilceSinirlari && (
@@ -3258,6 +5422,7 @@ export default function ParselensPage() {
                 </svg>
               </div>
               <span className="text-white text-xs font-medium">İlçe Sınırları</span>
+              {imarBaskisi && <span className="text-amber-400/60 text-[9px] ml-auto">İmar modu aktif</span>}
             </label>
           </div>
         )}
@@ -3277,7 +5442,7 @@ export default function ParselensPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-medium text-white">{analysisTitle}</h2>
             <span className="text-sm font-medium text-white/80 bg-white/10 px-3 py-1.5 rounded-lg">
-              {propertyType}
+              {imarBaskisi ? 'Arsa' : propertyType}
             </span>
           </div>
           

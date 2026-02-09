@@ -3,26 +3,45 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 
+export interface FilterValues {
+  category: Category;
+  tip: Tip;
+  odaSayisi: string;
+  binaYasi: string;
+  segment: string;
+  bolumSayisi: string;
+}
+
 interface FilterPopupProps {
   isOpen: boolean;
   onClose: () => void;
+  onApply: (filters: FilterValues) => void;
+  initialValues?: Partial<FilterValues>;
 }
 
-type Category = 'konut' | 'ticari' | 'arsa';
+type Category = 'konut' | 'ticari' | 'arsa' | 'arazi';
 type Tip = 'satilik' | 'kiralik';
 
-export default function FilterPopup({ isOpen, onClose }: FilterPopupProps) {
-  const [category, setCategory] = useState<Category>('konut');
-  const [tip, setTip] = useState<Tip>('satilik');
-  const [odaSayisi, setOdaSayisi] = useState('');
-  const [binaYasi, setBinaYasi] = useState('');
-  const [segment, setSegment] = useState('');
-  const [bolumSayisi, setBolumSayisi] = useState('');
+export default function FilterPopup({ isOpen, onClose, onApply, initialValues }: FilterPopupProps) {
+  const [category, setCategory] = useState<Category>(initialValues?.category || 'konut');
+  const [tip, setTip] = useState<Tip>(initialValues?.tip || 'satilik');
+  const [odaSayisi, setOdaSayisi] = useState(initialValues?.odaSayisi || '');
+  const [binaYasi, setBinaYasi] = useState(initialValues?.binaYasi || '');
+  const [segment, setSegment] = useState(initialValues?.segment || '');
+  const [bolumSayisi, setBolumSayisi] = useState(initialValues?.bolumSayisi || '');
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // initialValues değişince state'leri güncelle
+  useEffect(() => {
+    if (initialValues) {
+      if (initialValues.category) setCategory(initialValues.category);
+      if (initialValues.tip) setTip(initialValues.tip);
+    }
+  }, [initialValues?.category, initialValues?.tip]);
 
   const handleReset = () => {
     setCategory('konut');
@@ -34,8 +53,7 @@ export default function FilterPopup({ isOpen, onClose }: FilterPopupProps) {
   };
 
   const handleApply = () => {
-    // Burada filtre verilerini parent component'e gönderebilirsiniz
-    console.log('Filters:', {
+    onApply({
       category,
       tip,
       odaSayisi,
@@ -47,6 +65,29 @@ export default function FilterPopup({ isOpen, onClose }: FilterPopupProps) {
   };
 
   if (!isOpen || !mounted) return null;
+
+  // Kategori butonu yardımcı fonksiyonu
+  const catBtn = (cat: Category, label: string, color: string = 'blue') => {
+    const isActive = category === cat;
+    const colorMap: Record<string, string> = {
+      blue: isActive ? 'bg-blue-500 shadow-blue-500/30' : '',
+      emerald: isActive ? 'bg-emerald-500 shadow-emerald-500/30' : '',
+      amber: isActive ? 'bg-amber-500 shadow-amber-500/30' : '',
+      purple: isActive ? 'bg-purple-500 shadow-purple-500/30' : '',
+    };
+    return (
+      <button
+        onClick={() => { setCategory(cat); setSegment(''); }}
+        className={`py-2.5 px-3 rounded-xl text-sm font-semibold transition-all outline-none focus:outline-none ${
+          isActive
+            ? `${colorMap[color]} text-white shadow-lg`
+            : 'bg-white/10 text-white/70 border border-white/10 hover:bg-white/20'
+        }`}
+      >
+        {label}
+      </button>
+    );
+  };
 
   const popupContent = (
     <>
@@ -80,38 +121,19 @@ export default function FilterPopup({ isOpen, onClose }: FilterPopupProps) {
           {/* Emlak Kategorisi */}
           <div className="mb-5">
             <label className="block text-sm font-semibold text-white/80 mb-2">Emlak Kategorisi</label>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                onClick={() => setCategory('konut')}
-                className={`py-2.5 px-3 rounded-xl text-sm font-semibold transition-all outline-none focus:outline-none ${
-                  category === 'konut'
-                    ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/30'
-                    : 'bg-white/10 text-white/70 border border-white/10 hover:bg-white/20'
-                }`}
-              >
-                Konut
-              </button>
-              <button
-                onClick={() => setCategory('ticari')}
-                className={`py-2.5 px-3 rounded-xl text-sm font-semibold transition-all outline-none focus:outline-none ${
-                  category === 'ticari'
-                    ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/30'
-                    : 'bg-white/10 text-white/70 border border-white/10 hover:bg-white/20'
-                }`}
-              >
-                Ticari
-              </button>
-              <button
-                onClick={() => setCategory('arsa')}
-                className={`py-2.5 px-3 rounded-xl text-sm font-semibold transition-all outline-none focus:outline-none ${
-                  category === 'arsa'
-                    ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/30'
-                    : 'bg-white/10 text-white/70 border border-white/10 hover:bg-white/20'
-                }`}
-              >
-                Arsa
-              </button>
+            <div className="grid grid-cols-4 gap-2">
+              {catBtn('konut', 'Konut', 'blue')}
+              {catBtn('arsa', 'Arsa', 'emerald')}
+              {catBtn('arazi', 'Arazi', 'amber')}
+              {catBtn('ticari', 'Ticari', 'purple')}
             </div>
+            {/* Kategori açıklaması */}
+            <p className="text-[11px] text-white/40 mt-2">
+              {category === 'konut' && 'Daire, müstakil ev, villa vb. konut fiyatları'}
+              {category === 'arsa' && 'İmarlı arsa fiyatları (konut, villa, ticari imarlı)'}
+              {category === 'arazi' && 'İmarsız arazi fiyatları (tarla, zeytinlik, bağ-bahçe)'}
+              {category === 'ticari' && 'İşyeri, ofis, dükkan, depo vb. ticari fiyatlar'}
+            </p>
           </div>
 
           {/* Tip */}
@@ -264,15 +286,36 @@ export default function FilterPopup({ isOpen, onClose }: FilterPopupProps) {
           {/* ARSA FİLTRELERİ */}
           {category === 'arsa' && (
             <div className="mb-5">
-              <label className="block text-sm font-semibold text-zinc-800 mb-2">Segment</label>
+              <label className="block text-sm font-semibold text-white/80 mb-2">İmar Tipi</label>
               <select
                 value={segment}
                 onChange={(e) => setSegment(e.target.value)}
-                className="w-full p-3 rounded-xl bg-white/50 border border-black/10 text-sm text-zinc-700 outline-none focus:border-blue-500 focus:bg-white/70 transition-all"
+                className="w-full p-3 rounded-xl bg-white/10 border border-white/10 text-sm text-white outline-none focus:border-blue-500 focus:bg-white/20 transition-all"
               >
                 <option value="">Tümü</option>
-                <option value="arsa">Arsa</option>
-                <option value="arazi">Arazi</option>
+                <option value="konut">Konut İmarlı</option>
+                <option value="ticari">Ticari İmarlı</option>
+                <option value="villa">Villa İmarlı</option>
+                <option value="turizm">Turizm İmarlı</option>
+              </select>
+            </div>
+          )}
+
+          {/* ARAZİ FİLTRELERİ */}
+          {category === 'arazi' && (
+            <div className="mb-5">
+              <label className="block text-sm font-semibold text-white/80 mb-2">Arazi Tipi</label>
+              <select
+                value={segment}
+                onChange={(e) => setSegment(e.target.value)}
+                className="w-full p-3 rounded-xl bg-white/10 border border-white/10 text-sm text-white outline-none focus:border-blue-500 focus:bg-white/20 transition-all"
+              >
+                <option value="">Tümü</option>
+                <option value="tarla">Tarla</option>
+                <option value="zeytinlik">Zeytinlik</option>
+                <option value="bag-bahce">Bağ-Bahçe</option>
+                <option value="sera">Sera</option>
+                <option value="ciftlik">Çiftlik</option>
               </select>
             </div>
           )}

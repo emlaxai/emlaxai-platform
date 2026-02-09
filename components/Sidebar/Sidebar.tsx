@@ -4,10 +4,14 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { useSidebar } from '@/contexts/SidebarContext';
+import { useExaChat } from '@/contexts/ExaChatContext';
 
 export default function Sidebar() {
   const pathname = usePathname();
   const { isOpen, setIsOpen } = useSidebar();
+  const { sessions, activeSessionId, setActiveSession, deleteSession } = useExaChat();
+
+  const isExaActive = pathname === '/exa' || pathname.startsWith('/exa');
 
   const navItems = [
     {
@@ -37,8 +41,13 @@ export default function Sidebar() {
     }
   ];
 
+  // Son 6 sohbet geçmişi
+  const recentSessions = sessions.slice(0, 6);
+
   return (
     <aside 
+      onMouseEnter={() => setIsOpen(true)}
+      onMouseLeave={() => setIsOpen(false)}
       className={`
         hidden md:block fixed left-5 top-5 bottom-5 z-50 transition-all duration-300 overflow-x-hidden
         ${isOpen ? 'w-[280px]' : 'w-20'}
@@ -52,31 +61,26 @@ export default function Sidebar() {
         boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1)'
       }}
     >
-      <div className={`flex flex-col h-full ${isOpen ? 'p-5' : 'p-2'}`}>
+      <div className={`flex flex-col h-full ${isOpen ? 'p-5' : 'px-0 py-4'}`}>
         {/* Logo */}
         <div className="flex items-center justify-center mb-5">
           {isOpen ? (
-            <img 
-              src="https://emlaxai.com/wp-content/uploads/2025/12/exalogo4.svg" 
-              alt="EmlaXAI" 
-              style={{
-                width: '140px',
-                height: 'auto',
-                filter: 'brightness(0) invert(1)'
-              }}
+            <Image
+              src="/icons/emlaxai-logo.svg"
+              alt="EmlaXAI Logo"
+              width={110}
+              height={26}
+              priority
+              style={{ objectFit: 'contain' }}
             />
           ) : (
-            <img 
-              src="https://emlaxai.com/wp-content/uploads/2025/12/exa-spiral.svg" 
-              alt="EmlaXAI" 
-              className="flex-shrink-0"
-              style={{
-                width: '52px',
-                height: '52px',
-                minWidth: '52px',
-                minHeight: '52px',
-                filter: 'brightness(0) invert(1)'
-              }}
+            <Image
+              src="/icons/emlaxai-icon.svg"
+              alt="EmlaXAI Icon"
+              width={40}
+              height={40}
+              priority
+              style={{ objectFit: 'contain', width: '40px', height: '40px' }}
             />
           )}
         </div>
@@ -92,7 +96,7 @@ export default function Sidebar() {
                 className={`
                   flex items-center gap-3 rounded-xl transition-all duration-200
                   outline-none focus:outline-none
-                  ${isOpen ? 'px-4 py-3' : 'p-2 justify-center'}
+                  ${isOpen ? 'px-4 py-3' : 'py-3 justify-center mx-2'}
                   ${isActive 
                     ? 'bg-white/12 text-blue-400' 
                     : 'text-white/65 hover:bg-white/8 hover:text-white/95'
@@ -118,33 +122,84 @@ export default function Sidebar() {
             );
           })}
 
-          {/* Exa Button */}
-          <button
+          {/* Exa Link */}
+          <Link
+            href="/exa"
             className={`
-              flex items-center gap-3 rounded-xl transition-all duration-200 text-white/65 hover:bg-white/8 hover:text-white/95
+              flex items-center gap-3 rounded-xl transition-all duration-200
               outline-none focus:outline-none
-              ${isOpen ? 'px-4 py-3' : 'p-2 justify-center'}
+              ${isOpen ? 'px-4 py-3' : 'py-3 justify-center mx-2'}
+              ${isExaActive
+                ? 'bg-white/12 text-blue-400'
+                : 'text-white/65 hover:bg-white/8 hover:text-white/95'
+              }
             `}
           >
-            <div className={`flex-shrink-0 flex items-center justify-center ${isOpen ? 'w-6 h-6' : 'w-12 h-12'}`}>
-              <img 
-                src="https://emlaxai.com/wp-content/uploads/2025/12/exa-spiral.svg" 
-                alt="Exa" 
-                className="flex-shrink-0"
+            <div className="flex-shrink-0 w-8 h-8 flex items-center justify-center">
+              <Image
+                src="/icons/emlaxai-icon.svg"
+                alt="Exa"
+                width={28}
+                height={28}
                 style={{
-                  width: isOpen ? '24px' : '48px',
-                  height: isOpen ? '24px' : '48px',
-                  minWidth: isOpen ? '24px' : '48px',
-                  minHeight: isOpen ? '24px' : '48px',
-                  transform: isOpen ? 'scale(1.5)' : 'scale(1)',
-                  filter: 'brightness(0) invert(1) opacity(0.7)'
+                  objectFit: 'contain',
+                  width: '28px',
+                  height: '28px',
+                  opacity: isExaActive ? 1 : 0.6,
+                  filter: isExaActive ? 'brightness(0) saturate(100%) invert(52%) sepia(98%) saturate(1000%) hue-rotate(196deg) brightness(100%) contrast(96%)' : 'none',
                 }}
               />
             </div>
             {isOpen && (
               <span className="text-sm font-medium">Exa</span>
             )}
-          </button>
+          </Link>
+
+          {/* Exa Chat Geçmişi - Sidebar açıkken */}
+          {isOpen && recentSessions.length > 0 && (
+            <div className="ml-4 pl-4 border-l border-white/8 flex flex-col gap-0.5 mt-0">
+              {recentSessions.map(session => (
+                <div
+                  key={session.id}
+                  className={`
+                    group flex items-center gap-1 rounded-lg transition-all
+                    ${activeSessionId === session.id && isExaActive
+                      ? 'bg-white/5'
+                      : 'hover:bg-white/3'
+                    }
+                  `}
+                >
+                  <Link
+                    href={`/exa?chat=${session.id}`}
+                    onClick={() => setActiveSession(session.id)}
+                    className={`
+                      text-[11px] py-1.5 px-2 truncate block flex-1 min-w-0
+                      ${activeSessionId === session.id && isExaActive
+                        ? 'text-blue-400'
+                        : 'text-white/35 hover:text-white/60'
+                      }
+                    `}
+                    title={session.title}
+                  >
+                    {session.title}
+                  </Link>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteSession(session.id);
+                    }}
+                    className="flex-shrink-0 p-1 mr-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400 hover:bg-white/5 transition-all"
+                    title="Sohbeti sil"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="3 6 5 6 21 6"></polyline>
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </nav>
 
         {/* Bottom Section */}
@@ -154,7 +209,7 @@ export default function Sidebar() {
             className={`
               flex items-center gap-3 rounded-xl transition-all duration-200 text-white/65 hover:bg-white/8 hover:text-white/95
               outline-none focus:outline-none
-              ${isOpen ? 'px-4 py-3' : 'p-2 justify-center'}
+              ${isOpen ? 'px-4 py-3' : 'py-3 justify-center mx-2'}
             `}
           >
             <div className="flex-shrink-0 w-6 h-6 flex items-center justify-center">
@@ -164,26 +219,9 @@ export default function Sidebar() {
               </svg>
             </div>
             {isOpen && (
-              <span className="text-sm font-medium">Profil</span>
+              <span className="text-sm font-medium">Hesabım</span>
             )}
           </Link>
-
-          <button
-            className={`
-              flex items-center gap-3 rounded-xl transition-all duration-200 text-white/65 hover:bg-white/8 hover:text-white/95
-              outline-none focus:outline-none
-              ${isOpen ? 'px-4 py-3' : 'p-2 justify-center'}
-            `}
-          >
-            <div className="flex-shrink-0 w-6 h-6 flex items-center justify-center">
-              <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-              </svg>
-            </div>
-            {isOpen && (
-              <span className="text-sm font-medium">Tema</span>
-            )}
-          </button>
         </div>
       </div>
     </aside>
