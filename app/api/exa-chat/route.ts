@@ -2,9 +2,16 @@ import { NextRequest } from 'next/server';
 import OpenAI from 'openai';
 import { backendJSON } from '@/lib/backend';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+export const dynamic = 'force-dynamic';
+
+// Lazy initialization - build sırasında değil, sadece request gelince oluştur
+let _openai: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (!_openai) {
+    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  return _openai;
+}
 
 // ========================================================================
 // Function Definitions - Exa'nın erişebileceği veritabanı fonksiyonları
@@ -615,6 +622,7 @@ export async function POST(request: NextRequest) {
 
     // İlk çağrı: GPT karar verir - fonksiyon çağıracak mı, direkt yanıt mı verecek
     console.log('[Exa] İlk GPT çağrısı başlıyor...');
+    const openai = getOpenAI();
     const firstResponse = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: chatMessages,
