@@ -7,7 +7,7 @@ export default function ComingSoon() {
         {/* Logo */}
         <div className="mb-10">
           <Image
-            src="/icons/exalogo3.svg"
+            src="/icons/exalogo4.svg"
             alt="EmlaXAI Logo"
             width={400}
             height={142}
