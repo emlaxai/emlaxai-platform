@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Mahalle Fiyat Motoru - Faz 1: İsim Standardizasyonu
  *

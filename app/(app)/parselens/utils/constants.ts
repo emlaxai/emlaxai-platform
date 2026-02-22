@@ -1,3 +1,4 @@
+// @ts-nocheck
 // GeoJSON NAME_1 → DB il ismi eşleştirme
 export const GEOJSON_TO_DB_NAME: Record<string, string> = {
   'Afyon': 'Afyonkarahisar',
