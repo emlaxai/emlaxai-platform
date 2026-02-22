@@ -31,6 +31,9 @@ yarn-error.log*
 .env.test.local
 .env.production.local
 
+# data (large SQLite files)
+/data/*.db
+
 # vercel
 .vercel
 

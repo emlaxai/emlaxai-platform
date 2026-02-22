@@ -8,9 +8,10 @@ export async function GET(
   const { il, ilce, mahalle } = await params;
   const { searchParams } = new URL(request.url);
   const ay_sayisi = searchParams.get('ay_sayisi') || '48';
+  const kategori = searchParams.get('kategori') || 'konut';
   
   const { data, error, status } = await backendJSON(
-    `/api/v1/mahalle-trend/${encodeURIComponent(il)}/${encodeURIComponent(ilce)}/${encodeURIComponent(mahalle)}?ay_sayisi=${ay_sayisi}`
+    `/api/v1/mahalle-trend/${encodeURIComponent(il)}/${encodeURIComponent(ilce)}/${encodeURIComponent(mahalle)}?ay_sayisi=${ay_sayisi}&kategori=${encodeURIComponent(kategori)}`
   );
   
   if (error) {

@@ -180,27 +180,56 @@ export async function getIlTrend(il: string, ay_sayisi: number = 48, kategori: s
 }
 
 /** Bir ilin tüm ilçelerinin güncel fiyatları */
-export async function getIlceFiyatlari(il: string): Promise<IlceFiyatlari> {
-  return apiFetch<IlceFiyatlari>(`/api/ilce-fiyatlari/${encodeURIComponent(il)}`);
+export async function getIlceFiyatlari(il: string, kategori: string = 'konut'): Promise<IlceFiyatlari> {
+  return apiFetch<IlceFiyatlari>(`/api/ilce-fiyatlari/${encodeURIComponent(il)}?kategori=${encodeURIComponent(kategori)}`);
 }
 
 /** Tek ilçenin trend verisi */
-export async function getIlceTrend(il: string, ilce: string, ay_sayisi: number = 48): Promise<IlceTrend> {
-  return apiFetch<IlceTrend>(`/api/ilce-trend/${encodeURIComponent(il)}/${encodeURIComponent(ilce)}?ay_sayisi=${ay_sayisi}`);
+export async function getIlceTrend(il: string, ilce: string, ay_sayisi: number = 48, kategori: string = 'konut'): Promise<IlceTrend> {
+  return apiFetch<IlceTrend>(`/api/ilce-trend/${encodeURIComponent(il)}/${encodeURIComponent(ilce)}?ay_sayisi=${ay_sayisi}&kategori=${encodeURIComponent(kategori)}`);
 }
 
 /** Bir ilçenin tüm mahallelerinin güncel fiyatları */
-export async function getMahalleFiyatlari(il: string, ilce: string): Promise<MahalleFiyatlari> {
-  return apiFetch<MahalleFiyatlari>(`/api/mahalle-fiyatlari/${encodeURIComponent(il)}/${encodeURIComponent(ilce)}`);
+export async function getMahalleFiyatlari(il: string, ilce: string, kategori: string = 'konut'): Promise<MahalleFiyatlari> {
+  return apiFetch<MahalleFiyatlari>(`/api/mahalle-fiyatlari/${encodeURIComponent(il)}/${encodeURIComponent(ilce)}?kategori=${encodeURIComponent(kategori)}`);
 }
 
 /** Tek mahallenin trend verisi */
 export async function getMahalleTrend(
-  il: string, ilce: string, mahalle: string, ay_sayisi: number = 48
+  il: string, ilce: string, mahalle: string, ay_sayisi: number = 48, kategori: string = 'konut'
 ): Promise<MahalleTrend> {
   return apiFetch<MahalleTrend>(
-    `/api/mahalle-trend/${encodeURIComponent(il)}/${encodeURIComponent(ilce)}/${encodeURIComponent(mahalle)}?ay_sayisi=${ay_sayisi}`
+    `/api/mahalle-trend/${encodeURIComponent(il)}/${encodeURIComponent(ilce)}/${encodeURIComponent(mahalle)}?ay_sayisi=${ay_sayisi}&kategori=${encodeURIComponent(kategori)}`
   );
+}
+
+// ========================================================================
+// TKGM TAPU İŞLEM HACMİ
+// ========================================================================
+
+export interface TapuIlItem {
+  il: string;
+  sira: number;
+  parsel_sayisi: number;
+  toplam_islem: number;
+  ort_islem: number;
+  max_islem: number;
+  yogun_parsel: number;
+}
+
+export interface TapuIslemToplam {
+  iller: TapuIlItem[];
+  total: number;
+  genel: {
+    toplam_islem: number;
+    toplam_parsel: number;
+    ort_islem_per_parsel: number;
+  };
+}
+
+/** TKGM tüm illerin tapu işlem hacmi istatistikleri */
+export async function getTapuIslemToplam(): Promise<TapuIslemToplam> {
+  return apiFetch<TapuIslemToplam>('/api/tapu-islem-toplam');
 }
 
 // ========================================================================

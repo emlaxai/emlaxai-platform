@@ -41,7 +41,6 @@ export default function Sidebar() {
     }
   ];
 
-  // Son 6 sohbet geçmişi
   const recentSessions = sessions.slice(0, 6);
 
   return (
@@ -49,7 +48,7 @@ export default function Sidebar() {
       onMouseEnter={() => setIsOpen(true)}
       onMouseLeave={() => setIsOpen(false)}
       className={`
-        hidden md:block fixed left-5 top-5 bottom-5 z-50 transition-all duration-300 overflow-x-hidden
+        hidden md:block fixed left-5 top-5 bottom-5 z-50 transition-[width] duration-300 ease-in-out overflow-hidden
         ${isOpen ? 'w-[280px]' : 'w-20'}
       `}
       style={{
@@ -61,10 +60,10 @@ export default function Sidebar() {
         boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1)'
       }}
     >
-      <div className={`flex flex-col h-full ${isOpen ? 'p-5' : 'px-0 py-4'}`}>
+      <div className="flex flex-col h-full px-3 py-4 transition-[padding] duration-300">
         {/* Logo */}
-        <div className="flex items-center justify-center mb-5">
-          {isOpen ? (
+        <div className="flex items-center justify-center mb-5 h-10 relative overflow-hidden">
+          <div className={`absolute transition-all duration-300 ${isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-75'}`}>
             <Image
               src="/icons/emlaxai-logo.svg"
               alt="EmlaXAI Logo"
@@ -73,20 +72,21 @@ export default function Sidebar() {
               priority
               style={{ objectFit: 'contain' }}
             />
-          ) : (
+          </div>
+          <div className={`absolute transition-all duration-300 ${isOpen ? 'opacity-0 scale-75' : 'opacity-100 scale-100'}`}>
             <Image
               src="/icons/emlaxai-icon.svg"
               alt="EmlaXAI Icon"
-              width={40}
-              height={40}
+              width={36}
+              height={36}
               priority
-              style={{ objectFit: 'contain', width: '40px', height: '40px' }}
+              style={{ objectFit: 'contain', width: '36px', height: '36px' }}
             />
-          )}
+          </div>
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 flex flex-col gap-2 overflow-y-auto">
+        <nav className="flex-1 flex flex-col gap-1.5 overflow-y-auto overflow-x-hidden">
           {navItems.map((item) => {
             const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
             return (
@@ -94,9 +94,8 @@ export default function Sidebar() {
                 key={item.href}
                 href={item.href}
                 className={`
-                  flex items-center gap-3 rounded-xl transition-all duration-200
+                  flex items-center gap-3 rounded-xl transition-all duration-200 h-11 px-4
                   outline-none focus:outline-none
-                  ${isOpen ? 'px-4 py-3' : 'py-3 justify-center mx-2'}
                   ${isActive 
                     ? 'bg-white/12 text-blue-400' 
                     : 'text-white/65 hover:bg-white/8 hover:text-white/95'
@@ -113,11 +112,9 @@ export default function Sidebar() {
                     style={isActive ? { filter: 'brightness(0) saturate(100%) invert(64%) sepia(98%) saturate(2898%) hue-rotate(197deg) brightness(101%) contrast(93%)' } : undefined}
                   />
                 </div>
-                {isOpen && (
-                  <span className="text-sm font-medium whitespace-nowrap">
-                    {item.label}
-                  </span>
-                )}
+                <span className={`text-sm font-medium whitespace-nowrap transition-opacity duration-200 ${isOpen ? 'opacity-100' : 'opacity-0'}`}>
+                  {item.label}
+                </span>
               </Link>
             );
           })}
@@ -126,9 +123,8 @@ export default function Sidebar() {
           <Link
             href="/exa"
             className={`
-              flex items-center gap-3 rounded-xl transition-all duration-200
+              flex items-center gap-3 rounded-xl transition-all duration-200 h-11 px-3
               outline-none focus:outline-none
-              ${isOpen ? 'px-4 py-3' : 'py-3 justify-center mx-2'}
               ${isExaActive
                 ? 'bg-white/12 text-blue-400'
                 : 'text-white/65 hover:bg-white/8 hover:text-white/95'
@@ -150,67 +146,61 @@ export default function Sidebar() {
                 }}
               />
             </div>
-            {isOpen && (
-              <span className="text-sm font-medium">Exa</span>
-            )}
+            <span className={`text-sm font-medium whitespace-nowrap transition-opacity duration-200 ${isOpen ? 'opacity-100' : 'opacity-0'}`}>
+              Exa
+            </span>
           </Link>
 
-          {/* Exa Chat Geçmişi - Sidebar açıkken */}
-          {isOpen && recentSessions.length > 0 && (
-            <div className="ml-4 pl-4 border-l border-white/8 flex flex-col gap-0.5 mt-0">
-              {recentSessions.map(session => (
-                <div
-                  key={session.id}
+          {/* Exa Chat Geçmişi */}
+          <div className={`ml-4 pl-4 border-l border-white/8 flex flex-col gap-0.5 overflow-hidden transition-all duration-300 ${isOpen && recentSessions.length > 0 ? 'max-h-[300px] opacity-100' : 'max-h-0 opacity-0'}`}>
+            {recentSessions.map(session => (
+              <div
+                key={session.id}
+                className={`
+                  group flex items-center gap-1 rounded-lg transition-all
+                  ${activeSessionId === session.id && isExaActive
+                    ? 'bg-white/5'
+                    : 'hover:bg-white/3'
+                  }
+                `}
+              >
+                <Link
+                  href={`/exa?chat=${session.id}`}
+                  onClick={() => setActiveSession(session.id)}
                   className={`
-                    group flex items-center gap-1 rounded-lg transition-all
+                    text-[11px] py-1.5 px-2 truncate block flex-1 min-w-0
                     ${activeSessionId === session.id && isExaActive
-                      ? 'bg-white/5'
-                      : 'hover:bg-white/3'
+                      ? 'text-blue-400'
+                      : 'text-white/35 hover:text-white/60'
                     }
                   `}
+                  title={session.title}
                 >
-                  <Link
-                    href={`/exa?chat=${session.id}`}
-                    onClick={() => setActiveSession(session.id)}
-                    className={`
-                      text-[11px] py-1.5 px-2 truncate block flex-1 min-w-0
-                      ${activeSessionId === session.id && isExaActive
-                        ? 'text-blue-400'
-                        : 'text-white/35 hover:text-white/60'
-                      }
-                    `}
-                    title={session.title}
-                  >
-                    {session.title}
-                  </Link>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteSession(session.id);
-                    }}
-                    className="flex-shrink-0 p-1 mr-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400 hover:bg-white/5 transition-all"
-                    title="Sohbeti sil"
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="3 6 5 6 21 6"></polyline>
-                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                    </svg>
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+                  {session.title}
+                </Link>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteSession(session.id);
+                  }}
+                  className="flex-shrink-0 p-1 mr-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400 hover:bg-white/5 transition-all"
+                  title="Sohbeti sil"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
         </nav>
 
         {/* Bottom Section */}
         <div className="flex flex-col gap-2 pt-5 border-t border-white/8">
           <Link
             href="/account"
-            className={`
-              flex items-center gap-3 rounded-xl transition-all duration-200 text-white/65 hover:bg-white/8 hover:text-white/95
-              outline-none focus:outline-none
-              ${isOpen ? 'px-4 py-3' : 'py-3 justify-center mx-2'}
-            `}
+            className="flex items-center gap-3 rounded-xl transition-all duration-200 text-white/65 hover:bg-white/8 hover:text-white/95 outline-none focus:outline-none h-11 px-4"
           >
             <div className="flex-shrink-0 w-6 h-6 flex items-center justify-center">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -218,9 +208,9 @@ export default function Sidebar() {
                 <path d="M20 17.5C20 19.9853 20 22 12 22C4 22 4 19.9853 4 17.5C4 15.0147 7.58172 13 12 13C16.4183 13 20 15.0147 20 17.5Z" stroke="currentColor" strokeWidth="1.5"/>
               </svg>
             </div>
-            {isOpen && (
-              <span className="text-sm font-medium">Hesabım</span>
-            )}
+            <span className={`text-sm font-medium whitespace-nowrap transition-opacity duration-200 ${isOpen ? 'opacity-100' : 'opacity-0'}`}>
+              Hesabım
+            </span>
           </Link>
         </div>
       </div>

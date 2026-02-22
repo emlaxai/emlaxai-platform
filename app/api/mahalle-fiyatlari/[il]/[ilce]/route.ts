@@ -6,9 +6,11 @@ export async function GET(
   { params }: { params: Promise<{ il: string; ilce: string }> }
 ) {
   const { il, ilce } = await params;
+  const { searchParams } = new URL(request.url);
+  const kategori = searchParams.get('kategori') || 'konut';
   
   const { data, error, status } = await backendJSON(
-    `/api/v1/mahalle-fiyatlari/${encodeURIComponent(il)}/${encodeURIComponent(ilce)}`
+    `/api/v1/mahalle-fiyatlari/${encodeURIComponent(il)}/${encodeURIComponent(ilce)}?kategori=${encodeURIComponent(kategori)}`
   );
   
   if (error) {

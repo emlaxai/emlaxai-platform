@@ -1,13 +1,19 @@
+import Image from 'next/image';
+
 export default function ComingSoon() {
   return (
     <div className="min-h-screen bg-black flex items-center justify-center px-6">
       <div className="max-w-2xl text-center">
         {/* Logo */}
-        <div className="mb-8">
-          <h1 className="text-6xl font-bold text-white mb-2">
-            EmlaXAI
-          </h1>
-          <div className="h-1 w-32 bg-gradient-to-r from-blue-500 to-purple-500 mx-auto rounded-full"></div>
+        <div className="mb-10">
+          <Image
+            src="/icons/exalogo3.svg"
+            alt="EmlaXAI Logo"
+            width={400}
+            height={142}
+            priority
+            className="mx-auto"
+          />
         </div>
 
         {/* Main Message */}

@@ -11,9 +11,33 @@ const API_KEY = process.env.EMLAXAI_API_KEY || '';
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    
+    const bbox = searchParams.get('bbox');
+    const isZones = searchParams.get('zones') === 'true';
+
+    if (isZones) {
+      if (!bbox) {
+        return NextResponse.json({ type: 'FeatureCollection', features: [] }, { status: 200 });
+      }
+      const url = `${BACKEND_URL}/api/v1/zones?bbox=${encodeURIComponent(bbox)}`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const response = await fetch(url, {
+        headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        cache: 'no-store',
+      });
+      clearTimeout(timeout);
+      if (!response.ok) {
+        return NextResponse.json({ type: 'FeatureCollection', features: [] }, { status: 200 });
+      }
+      const data = await response.json();
+      return NextResponse.json(data, {
+        status: 200,
+        headers: { 'Cache-Control': 'public, max-age=600, s-maxage=600' },
+      });
+    }
+
     const il = searchParams.get('il');
-    const bbox = searchParams.get('bbox'); // minLng,minLat,maxLng,maxLat
     const zoom = searchParams.get('zoom') || '14';
     const limit = searchParams.get('limit') || '5000';
     const imarMode = searchParams.get('imar_mode') || 'false';
@@ -54,7 +78,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(data, {
       status: 200,
       headers: {
-        'Cache-Control': 'public, max-age=300, s-maxage=300', // 5 dakika cache
+        'Cache-Control': 'public, max-age=60, s-maxage=60',
       },
     });
   } catch (error: any) {
