@@ -12,6 +12,7 @@ import { MapRefSetter, MapResizer } from './MapHelpers';
 import { geoNameToDbName, getPriceColor } from '../utils/constants';
 import FilterPopup from '@/components/FilterPopup/FilterPopup';
 import ExaMarkdown from '@/components/ExaMarkdown/ExaMarkdown';
+import NufusTab from './tabs/NufusTab';
 
 const ReactECharts = dynamic(() => import('echarts-for-react'), { ssr: false });
 const MapContainer = dynamic(
@@ -64,8 +65,9 @@ export default function MobileLayout(props: Record<string, any>) {
     setChatPanelHeight, 
     handleIlClick, handleIlceClick, handleSearchInput, handleSearchSelect,
     handleFiltersApply, handleImarBaskisiToggle, handleExaChatSend,
-    handleChatResizeStart, handleParcelClick, searchAddress, tabs, exaChatMessages, chatEndRef, chatPanelHeight,
+    handleChatResizeStart, handleParcelClick, searchAddress, marketTabs, exaChatMessages, chatEndRef, chatPanelHeight,
     formatNumber, getMahallePrice, getMahalleColor, getIlColor, getIlPrice, getIlceColor, getIlcePrice,
+    nufusData, nufusLoading, selectedMahalle, demografiData,
     _mapRefCb,
   } = props;
   return (
@@ -844,7 +846,7 @@ export default function MobileLayout(props: Record<string, any>) {
           
           {/* Tab Navigation */}
           <div className="flex border-b border-white/10 mb-6 overflow-x-auto">
-            {tabs.map((tab: any) => (
+            {marketTabs.map((tab: any) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
@@ -1111,7 +1113,7 @@ export default function MobileLayout(props: Record<string, any>) {
               </div>
             )}
             {activeTab === 'nufus' && (
-              <div className="text-white/60 text-center py-8">Nüfus analizi içeriği buraya gelecek...</div>
+              <NufusTab nufusData={nufusData} nufusLoading={nufusLoading} selectedIl={selectedIl} selectedIlce={selectedIlce} selectedMahalle={selectedMahalle} demografiData={demografiData} formatNumber={formatNumber} />
             )}
             {activeTab === 'risk' && (
               <div className="text-white/60 text-center py-8">Risk analizi içeriği buraya gelecek...</div>

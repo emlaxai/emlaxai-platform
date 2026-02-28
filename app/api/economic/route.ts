@@ -1,12 +1,3 @@
-import { NextResponse } from 'next/server';
-import { backendJSON } from '@/lib/backend';
+import { proxyRoute } from '@/lib/api-handler';
 
-export async function GET() {
-  const { data, error, status } = await backendJSON('/api/v1/economic-data');
-  
-  if (error) {
-    return NextResponse.json({ error }, { status });
-  }
-  
-  return NextResponse.json(data);
-}
+export const GET = proxyRoute('/api/v1/economic-data', undefined, 300);

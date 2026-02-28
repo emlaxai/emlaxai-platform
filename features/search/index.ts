@@ -1,0 +1,1 @@
+export { useSearchHandler } from './useSearchHandler';

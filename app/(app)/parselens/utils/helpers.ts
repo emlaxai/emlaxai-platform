@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Mahalle Fiyat Motoru - Faz 1: İsim Standardizasyonu
  *
@@ -147,18 +146,18 @@ export function mergeDuplicateMahalleler<T extends { mahalle: string; guvenilirl
   }
 
   const result: T[] = [];
-  for (const [, entries] of groups) {
+  groups.forEach((entries) => {
     if (entries.length === 1) {
       result.push(entries[0]);
     } else {
-      const best = entries.reduce((a, b) => {
+      const best = entries.reduce((a: T, b: T) => {
         const aScore = a.guvenilirlik ?? 0;
         const bScore = b.guvenilirlik ?? 0;
         return bScore > aScore ? b : a;
       });
       result.push(best);
     }
-  }
+  });
 
   return result;
 }

@@ -1,14 +1,7 @@
-import { NextResponse } from 'next/server';
-import { backendJSON } from '@/lib/backend';
+import { proxyRoute } from '@/lib/api-handler';
 
-export async function GET() {
-  const { data, error, status } = await backendJSON('/api/v1/tapu-islem-toplam');
-
-  if (error) {
-    return NextResponse.json({ error }, { status });
-  }
-
-  return NextResponse.json(data, {
-    headers: { 'Cache-Control': 'public, max-age=300' },
-  });
-}
+export const GET = proxyRoute(
+  '/api/v1/tapu-islem-toplam',
+  undefined,
+  1800
+);

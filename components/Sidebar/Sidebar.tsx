@@ -22,7 +22,7 @@ export default function Sidebar() {
     {
       href: '/parselens',
       label: 'Parselens',
-      iconPath: '/icons/parselens.svg'
+      iconPath: '/icons/parselens-pro.svg'
     },
     {
       href: '/karsilastir',
@@ -115,6 +115,11 @@ export default function Sidebar() {
                 <span className={`text-sm font-medium whitespace-nowrap transition-opacity duration-200 ${isOpen ? 'opacity-100' : 'opacity-0'}`}>
                   {item.label}
                 </span>
+                {(item as any).badge && isOpen && (
+                  <span className="ml-auto px-1.5 py-0.5 text-[8px] font-bold bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-full uppercase tracking-wider">
+                    {(item as any).badge}
+                  </span>
+                )}
               </Link>
             );
           })}

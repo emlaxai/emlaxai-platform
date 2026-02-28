@@ -2,13 +2,21 @@
 'use client';
 import dynamic from 'next/dynamic';
 import { geoNameToDbName } from '../../utils/constants';
+import type { YasanilabilirlikData } from '@/lib/api';
 const ReactECharts = dynamic(() => import('echarts-for-react'), { ssr: false });
+
+const TT = { backgroundColor: 'rgba(0,0,0,0.88)', borderColor: 'rgba(255,255,255,0.12)', textStyle: { color: '#fff', fontSize: 12 } };
+const AL = { color: '#9ca3af', fontSize: 10 };
+const SL = { lineStyle: { color: 'rgba(255,255,255,0.05)' } };
 
 interface RiskTabProps {
   selectedIl: string | null;
   disasterRisk: any;
   economicData: any;
   economicDataLoading: boolean;
+  yasanilabilirlik?: YasanilabilirlikData | null;
+  yasanilabilirlikLoading?: boolean;
+  isPro?: boolean;
   formatNumber: (n: number, decimals?: number) => string;
   formatChange: (n: number) => string;
   getChangeColor: (n: number) => string;
@@ -18,10 +26,214 @@ interface RiskTabProps {
 
 export default function RiskTab({
   selectedIl, disasterRisk, economicData, economicDataLoading,
+  yasanilabilirlik, yasanilabilirlikLoading, isPro = false,
   formatNumber, formatChange, getChangeColor, getRiskColor, getRiskGradient
 }: RiskTabProps) {
+
+  const fmtN = (n: number) => n?.toLocaleString('tr-TR') ?? '—';
+
+  const yasanilabilirlikSection = !isPro && yasanilabilirlik ? (
+    <div className="bg-white/5 backdrop-blur-sm border border-white/10 hover:bg-white/8 transition-all duration-200 rounded-xl p-5 mb-4">
+      <div className="flex items-center gap-2 mb-1">
+        <div className="w-1 h-4 bg-emerald-500 rounded-full" />
+        <h3 className="text-white text-base font-semibold">Yaşanılabilirlik Endeksi</h3>
+      </div>
+      <p className="text-white/40 text-xs mb-4 ml-3">{yasanilabilirlik.il}</p>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+          <p className="text-white/40 text-[10px] uppercase tracking-wider">Güvenlik Skoru</p>
+          <p className="text-white text-xl font-bold mt-1">{yasanilabilirlik.guvenlik_skoru}<span className="text-white/30 text-sm">/100</span></p>
+          <p className={`text-[10px] mt-0.5 ${yasanilabilirlik.guvenlik_skoru >= 70 ? 'text-green-400' : yasanilabilirlik.guvenlik_skoru >= 40 ? 'text-yellow-400' : 'text-red-400'}`}>{yasanilabilirlik.seviye}</p>
+        </div>
+        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+          <p className="text-white/40 text-[10px] uppercase tracking-wider">Suç Oranı (10K)</p>
+          <p className="text-white text-xl font-bold mt-1">{yasanilabilirlik.suc_orani_10k.toFixed(1)}</p>
+          <p className="text-white/30 text-[10px] mt-0.5">TR Ort: {yasanilabilirlik.tr_suc_orani_10k.toFixed(1)}</p>
+        </div>
+        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+          <p className="text-white/40 text-[10px] uppercase tracking-wider">Güvenlik Sırası</p>
+          <p className="text-white text-xl font-bold mt-1">{yasanilabilirlik.guvenlik_sira}<span className="text-white/30 text-sm">/{yasanilabilirlik.toplam_il}</span></p>
+          <p className="text-white/30 text-[10px] mt-0.5">İller arası</p>
+        </div>
+        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+          <p className="text-white/40 text-[10px] uppercase tracking-wider">Toplam Hükümlü</p>
+          <p className="text-white text-xl font-bold mt-1">{fmtN(yasanilabilirlik.toplam_hukumlu)}</p>
+          <p className="text-white/30 text-[10px] mt-0.5">Nüfus: {fmtN(yasanilabilirlik.nufus)}</p>
+        </div>
+      </div>
+
+      {yasanilabilirlik.suc_turleri?.length > 0 && (
+        <div className="bg-white/[0.03] rounded-xl p-4 border border-white/[0.06]">
+          <h4 className="text-white/60 text-[10px] font-semibold uppercase tracking-wider mb-3">Suç Türü Dağılımı</h4>
+          <div className="h-56">
+            <ReactECharts option={{
+              grid: { top: 5, right: 55, bottom: 5, left: 100 }, tooltip: { ...TT, trigger: 'axis' },
+              yAxis: { type: 'category', data: [...yasanilabilirlik.suc_turleri].reverse().map(s => s.tur), axisLabel: AL },
+              xAxis: { type: 'value', show: false },
+              series: [{
+                type: 'bar', data: [...yasanilabilirlik.suc_turleri].reverse().map(s => s.sayi),
+                itemStyle: { color: 'rgba(16,185,129,0.5)', borderRadius: [0, 4, 4, 0] }, barWidth: '55%',
+                label: { show: true, position: 'right', color: 'rgba(255,255,255,0.5)', fontSize: 9, formatter: (p: any) => fmtN(p.value) },
+              }],
+            }} style={{ height: '100%', width: '100%' }} />
+          </div>
+        </div>
+      )}
+    </div>
+  ) : null;
+
   return (
     <div>
+                  {/* Bölgelens: Yaşanılabilirlik en üstte */}
+                  {yasanilabilirlikSection}
+
+                  {/* Doğal Afet Riskleri */}
+                  <div className="bg-white/5 backdrop-blur-sm border border-white/10 hover:bg-white/8 transition-all duration-200 rounded-xl p-5 mb-4">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="w-1 h-4 bg-red-500 rounded-full" />
+                      <h3 className="text-white text-base font-semibold">Doğal Afet Risk Haritası</h3>
+                    </div>
+                    <p className="text-white/40 text-xs mb-4 ml-3">{disasterRisk?.il || (selectedIl ? geoNameToDbName(selectedIl) : 'Türkiye Geneli')}</p>
+                      {!disasterRisk ? (
+                        <div className="text-white/40 text-sm text-center py-4">İl seçerek doğal afet risklerini görüntüleyin</div>
+                      ) : (
+                      <div className="space-y-3">
+                        {disasterRisk.deprem && (
+                        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <svg width="18" height="18" viewBox="0 0 32 32" fill={disasterRisk.deprem.risk_color} className="flex-shrink-0">
+                                <path d="M16.6123,2.2139a1.0094,1.0094,0,0,0-1.2427,0L1,13.4194l1.2427,1.5718L4,13.6211V26a2.0041,2.0041,0,0,0,2,2H26a2.0037,2.0037,0,0,0,2-2V13.63L29.7573,15,31,13.4282ZM6,12.0615,15,5.05v7.3638l3.458,3.458-6.7344,4.8105L14.3818,26H6ZM26,26H16.6182l-2.3418-4.6826,7.2656-5.1895L17,11.5859V5.0518l9,7.02Z"/>
+                              </svg>
+                              <span className="text-white text-sm font-medium">Deprem Riski</span>
+                            </div>
+                            <span className="text-sm font-bold" style={{ color: disasterRisk.deprem.risk_color }}>{disasterRisk.deprem.risk_label}</span>
+                          </div>
+                          <div className="h-2 bg-white/10 rounded-full overflow-hidden mb-3">
+                            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${disasterRisk.deprem.risk_pct}%`, background: `linear-gradient(to right, ${disasterRisk.deprem.risk_color}, ${disasterRisk.deprem.risk_color}cc)` }}></div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
+                              <div className="text-white/40 text-[10px] uppercase tracking-wider">PGA (%2)</div>
+                              <div className="text-white text-sm font-semibold">{disasterRisk.deprem.pga_2.toFixed(3)}g</div>
+                            </div>
+                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
+                              <div className="text-white/40 text-[10px] uppercase tracking-wider">PGA (%10)</div>
+                              <div className="text-white text-sm font-semibold">{disasterRisk.deprem.pga_10.toFixed(3)}g</div>
+                            </div>
+                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
+                              <div className="text-white/40 text-[10px] uppercase tracking-wider">Ss (%2)</div>
+                              <div className="text-white text-sm font-semibold">{disasterRisk.deprem.ss_2.toFixed(3)}g</div>
+                            </div>
+                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
+                              <div className="text-white/40 text-[10px] uppercase tracking-wider">S1 (%2)</div>
+                              <div className="text-white text-sm font-semibold">{disasterRisk.deprem.s1_2.toFixed(3)}g</div>
+                            </div>
+                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
+                              <div className="text-white/40 text-[10px] uppercase tracking-wider">PGV (%2)</div>
+                              <div className="text-white text-sm font-semibold">{disasterRisk.deprem.pgv_2.toFixed(1)} cm/s</div>
+                            </div>
+                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
+                              <div className="text-white/40 text-[10px] uppercase tracking-wider">Ss (%10)</div>
+                              <div className="text-white text-sm font-semibold">{disasterRisk.deprem.ss_10.toFixed(3)}g</div>
+                            </div>
+                          </div>
+                          <div className="mt-2 text-white/30 text-[10px]">Kaynak: AFAD TDTH · 50 yılda aşılma olasılığı</div>
+                        </div>
+                        )}
+                        {disasterRisk.yangin && (
+                        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <svg width="18" height="18" viewBox="0 0 24 24" fill={disasterRisk.yangin.risk_color} className="flex-shrink-0">
+                                <path fillRule="evenodd" clipRule="evenodd" d="M12.4803 2.76059C13.2315 2.30898 14.208 2.28697 15.0418 2.88997C17.7027 4.81436 20.75 8.2447 20.75 13.1111C20.75 16.9175 19.1146 19.3652 17.0325 20.835C15.7533 21.738 14.3232 22.2609 13.0331 22.5258C12.5577 22.6872 12.1 22.75 11.7333 22.75C11.6306 22.75 11.521 22.746 11.4058 22.7374C11.242 22.746 11.0843 22.75 10.9333 22.75C9.47245 22.75 7.31363 22.2658 5.50409 20.806C3.6625 19.3203 2.25 16.8771 2.25 13.1111C2.25 10.0344 3.87536 7.9652 5.40507 6.79826C6.04192 6.31244 6.80509 6.30435 7.40898 6.63407C7.99302 6.95295 8.40231 7.56762 8.47627 8.28958L8.5621 9.12741C8.59508 9.44943 8.75974 9.71671 8.93177 9.84683C9.0125 9.90789 9.07802 9.92706 9.12163 9.93034C9.15843 9.93311 9.21562 9.92815 9.30063 9.8729C9.95369 9.44849 10.4496 8.68506 10.7833 7.78664C11.1138 6.89653 11.25 5.96663 11.25 5.33336V5.00973C11.25 4.03696 11.7444 3.20294 12.4803 2.76059ZM15.5176 20.0225C15.7384 19.8964 15.9557 19.759 16.1675 19.6095C17.8631 18.4126 19.25 16.4159 19.25 13.1111C19.25 8.92389 16.6279 5.88822 14.1627 4.10543C13.838 3.8706 13.5133 3.88975 13.2531 4.04619C12.9775 4.21188 12.75 4.5528 12.75 5.00973V5.33336C12.75 6.14196 12.5831 7.24891 12.1894 8.30886C11.7988 9.3605 11.1494 10.4604 10.118 11.1306C9.38388 11.6077 8.59212 11.4706 8.02694 11.0432C7.49344 10.6397 7.14144 9.97856 7.0699 9.28027L6.98408 8.44244C6.95826 8.19039 6.82167 8.02241 6.69016 7.95061C6.5785 7.88965 6.45645 7.88284 6.31484 7.99087C5.04758 8.9576 3.75 10.6247 3.75 13.1111C3.75 16.4562 4.98195 18.4575 6.44591 19.6385C6.84345 19.9592 7.263 20.2233 7.68701 20.4381C7.41384 19.8888 7.25 19.2282 7.25 18.4445C7.25 16.341 8.57017 14.8717 9.69806 14.0521C10.2109 13.6795 10.8273 13.6907 11.2979 13.9755C11.7522 14.2504 12.0441 14.7589 12.0441 15.3334C12.0441 15.5682 12.0448 15.8335 12.0763 16.0969C12.0815 16.14 12.0873 16.1814 12.0938 16.221C12.254 15.8525 12.5484 15.5666 12.897 15.4155C13.3152 15.2342 13.847 15.2379 14.2912 15.5719C14.9907 16.098 15.75 17.0424 15.75 18.4445C15.75 19.0383 15.666 19.5627 15.5176 20.0225Z"/>
+                              </svg>
+                              <span className="text-white text-sm font-medium">Yangın Riski</span>
+                            </div>
+                            <span className="text-sm font-bold" style={{ color: disasterRisk.yangin.risk_color }}>{disasterRisk.yangin.risk_label}</span>
+                          </div>
+                          <div className="h-2 bg-white/10 rounded-full overflow-hidden mb-3">
+                            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${disasterRisk.yangin.risk_pct}%`, background: `linear-gradient(to right, ${disasterRisk.yangin.risk_color}, ${disasterRisk.yangin.risk_color}cc)` }}></div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
+                              <div className="text-white/40 text-[10px] uppercase tracking-wider">FWI Max</div>
+                              <div className="text-white text-sm font-semibold">{disasterRisk.yangin.fwi_max.toFixed(1)}</div>
+                            </div>
+                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
+                              <div className="text-white/40 text-[10px] uppercase tracking-wider">FWI Ort.</div>
+                              <div className="text-white text-sm font-semibold">{disasterRisk.yangin.fwi_ortalama.toFixed(1)}</div>
+                            </div>
+                          </div>
+                          <div className="mt-2 text-white/30 text-[10px]">Kaynak: Copernicus EFFIS · Haz-Eyl 2024 dönemi</div>
+                        </div>
+                        )}
+                        {disasterRisk.sel && (
+                        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <svg width="18" height="18" viewBox="0 0 32 32" fill={disasterRisk.sel.risk_color} className="flex-shrink-0">
+                                <path d="M2.884 8.884l2.933-2.933c3.246 4.352 6.929 4.429 10.184 0.24 3.256 4.187 6.936 4.111 10.184-0.24l2.932 2.933c0.226 0.227 0.539 0.367 0.885 0.367 0.691 0 1.251-0.56 1.251-1.251 0-0.345-0.14-0.658-0.366-0.884v0l-4-4c-0.226-0.226-0.539-0.366-0.885-0.366-0.445 0-0.836 0.232-1.058 0.582l-0.003 0.005c-1.395 2.232-2.758 3.413-3.939 3.413s-2.545-1.181-3.94-3.413c-0.238-0.333-0.624-0.548-1.059-0.548s-0.822 0.215-1.057 0.545l-0.003 0.004c-1.396 2.231-2.758 3.412-3.94 3.412s-2.545-1.181-3.94-3.412c-0.199-0.316-0.529-0.534-0.912-0.579l-0.006-0.001c-0.040-0.005-0.087-0.007-0.135-0.007-0.347 0-0.662 0.14-0.891 0.366l-4 4c-0.225 0.226-0.363 0.537-0.363 0.881 0 0.69 0.56 1.25 1.25 1.25 0.344 0 0.655-0.139 0.881-0.363z"/>
+                              </svg>
+                              <span className="text-white text-sm font-medium">Sel/Taşkın Riski</span>
+                            </div>
+                            <span className="text-sm font-bold" style={{ color: disasterRisk.sel.risk_color }}>{disasterRisk.sel.risk_label}</span>
+                          </div>
+                          <div className="h-2 bg-white/10 rounded-full overflow-hidden mb-3">
+                            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${disasterRisk.sel.risk_pct}%`, background: `linear-gradient(to right, ${disasterRisk.sel.risk_color}, ${disasterRisk.sel.risk_color}cc)` }}></div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
+                              <div className="text-white/40 text-[10px] uppercase tracking-wider">Nehir Seli</div>
+                              <div className="text-white text-sm font-semibold">{disasterRisk.sel.sel_nehir}</div>
+                            </div>
+                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
+                              <div className="text-white/40 text-[10px] uppercase tracking-wider">Kentsel Sel</div>
+                              <div className="text-white text-sm font-semibold">{disasterRisk.sel.sel_kentsel}</div>
+                            </div>
+                          </div>
+                          <div className="mt-2 text-white/30 text-[10px]">Kaynak: World Bank ThinkHazard / GFDRR</div>
+                        </div>
+                        )}
+                        {disasterRisk.heyelan && (
+                        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <svg width="18" height="18" viewBox="0 0 304.428 304.428" fill={disasterRisk.heyelan.risk_color} className="flex-shrink-0">
+                                <polygon points="304.428,290.78 192.408,216.411 166.649,216.995 159.753,189.147 122.766,167.54 124.503,117.125 66.696,89.945 56.025,41.215 0,13.648 0,290.78"/>
+                              </svg>
+                              <span className="text-white text-sm font-medium">Heyelan Riski</span>
+                            </div>
+                            <span className="text-sm font-bold" style={{ color: disasterRisk.heyelan.risk_color }}>{disasterRisk.heyelan.risk_label}</span>
+                          </div>
+                          <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${disasterRisk.heyelan.risk_pct}%`, background: `linear-gradient(to right, ${disasterRisk.heyelan.risk_color}, ${disasterRisk.heyelan.risk_color}cc)` }}></div>
+                          </div>
+                          <div className="mt-2 text-white/30 text-[10px]">Kaynak: World Bank ThinkHazard / GFDRR</div>
+                        </div>
+                        )}
+                        {disasterRisk.tsunami && (
+                        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <svg width="18" height="18" viewBox="0 0 24 24" fill={disasterRisk.tsunami.risk_color} className="flex-shrink-0">
+                                <path d="M2 16c0-2 2-4 4-4s4 2 4 4-2 4-4 4-4-2-4-4zm16 0c0-2 2-4 4-4v8c-2 0-4-2-4-4zM12 4c1.1 0 2 .9 2 2v4c0 1.1-.9 2-2 2s-2-.9-2-2V6c0-1.1.9-2 2-2zm-6 8c1.1 0 2 .9 2 2v2c0 1.1-.9 2-2 2s-2-.9-2-2v-2c0-1.1.9-2 2-2zm12-2c1.1 0 2 .9 2 2v4c0 1.1-.9 2-2 2s-2-.9-2-2v-4c0-1.1.9-2 2-2z"/>
+                              </svg>
+                              <span className="text-white text-sm font-medium">Tsunami Riski</span>
+                            </div>
+                            <span className="text-sm font-bold" style={{ color: disasterRisk.tsunami.risk_color }}>{disasterRisk.tsunami.risk_label}</span>
+                          </div>
+                          <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${disasterRisk.tsunami.risk_pct}%`, background: `linear-gradient(to right, ${disasterRisk.tsunami.risk_color}, ${disasterRisk.tsunami.risk_color}cc)` }}></div>
+                          </div>
+                          <div className="mt-2 text-white/30 text-[10px]">Kaynak: World Bank ThinkHazard / GFDRR</div>
+                        </div>
+                        )}
+                      </div>
+                      )}
+                    </div>
+
                   {/* Ekonomik Göstergeler - 6'lı Grid */}
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
                     {economicDataLoading ? (
@@ -261,9 +473,8 @@ export default function RiskTab({
 
                   </div>
 
-                  {/* Ekonomik Risk + Doğal Afet - Altlı Üstlü */}
+                  {/* Ekonomik Risk Değerlendirmesi */}
                   <div className="grid grid-cols-1 gap-4 mb-4">
-                  {/* Ekonomik Risk Skoru */}
                   <div className="bg-white/5 backdrop-blur-sm border border-white/10 hover:bg-white/8 transition-all duration-200 rounded-xl p-5">
                     <h3 className="text-white text-base font-semibold mb-4">Ekonomik Risk Değerlendirmesi</h3>
                       {economicData ? (() => {
@@ -368,232 +579,6 @@ export default function RiskTab({
                       )}
                   </div>
 
-                  {/* Doğal Afet Riskleri */}
-                  <div className="bg-white/5 backdrop-blur-sm border border-white/10 hover:bg-white/8 transition-all duration-200 rounded-xl p-5">
-                    <h3 className="text-white text-base font-semibold mb-1">Doğal Afet Risk Haritası</h3>
-                    <p className="text-white/40 text-xs mb-4">{disasterRisk?.il || (selectedIl ? geoNameToDbName(selectedIl) : 'Türkiye Geneli')}</p>
-                      {!disasterRisk ? (
-                        <div className="text-white/40 text-sm text-center py-4">Veriler yükleniyor...</div>
-                      ) : (
-                      <div className="space-y-3">
-                        {/* Deprem */}
-                        {disasterRisk.deprem && (
-                        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <svg width="18" height="18" viewBox="0 0 32 32" fill={disasterRisk.deprem.risk_color} className="flex-shrink-0">
-                                <path d="M16.6123,2.2139a1.0094,1.0094,0,0,0-1.2427,0L1,13.4194l1.2427,1.5718L4,13.6211V26a2.0041,2.0041,0,0,0,2,2H26a2.0037,2.0037,0,0,0,2-2V13.63L29.7573,15,31,13.4282ZM6,12.0615,15,5.05v7.3638l3.458,3.458-6.7344,4.8105L14.3818,26H6ZM26,26H16.6182l-2.3418-4.6826,7.2656-5.1895L17,11.5859V5.0518l9,7.02Z"/>
-                              </svg>
-                              <span className="text-white text-sm font-medium">Deprem Riski</span>
-                            </div>
-                            <span className="text-sm font-bold" style={{ color: disasterRisk.deprem.risk_color }}>{disasterRisk.deprem.risk_label}</span>
-                          </div>
-                          <div className="h-2 bg-white/10 rounded-full overflow-hidden mb-3">
-                            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${disasterRisk.deprem.risk_pct}%`, background: `linear-gradient(to right, ${disasterRisk.deprem.risk_color}, ${disasterRisk.deprem.risk_color}cc)` }}></div>
-                          </div>
-                          <div className="grid grid-cols-2 gap-2">
-                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
-                              <div className="text-white/40 text-[10px] uppercase tracking-wider">PGA (%2)</div>
-                              <div className="text-white text-sm font-semibold">{disasterRisk.deprem.pga_2.toFixed(3)}g</div>
-                            </div>
-                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
-                              <div className="text-white/40 text-[10px] uppercase tracking-wider">PGA (%10)</div>
-                              <div className="text-white text-sm font-semibold">{disasterRisk.deprem.pga_10.toFixed(3)}g</div>
-                            </div>
-                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
-                              <div className="text-white/40 text-[10px] uppercase tracking-wider">Ss (%2)</div>
-                              <div className="text-white text-sm font-semibold">{disasterRisk.deprem.ss_2.toFixed(3)}g</div>
-                            </div>
-                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
-                              <div className="text-white/40 text-[10px] uppercase tracking-wider">S1 (%2)</div>
-                              <div className="text-white text-sm font-semibold">{disasterRisk.deprem.s1_2.toFixed(3)}g</div>
-                            </div>
-                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
-                              <div className="text-white/40 text-[10px] uppercase tracking-wider">PGV (%2)</div>
-                              <div className="text-white text-sm font-semibold">{disasterRisk.deprem.pgv_2.toFixed(1)} cm/s</div>
-                            </div>
-                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
-                              <div className="text-white/40 text-[10px] uppercase tracking-wider">Ss (%10)</div>
-                              <div className="text-white text-sm font-semibold">{disasterRisk.deprem.ss_10.toFixed(3)}g</div>
-                            </div>
-                          </div>
-                          <div className="mt-2 text-white/30 text-[10px]">Kaynak: AFAD TDTH · 50 yılda aşılma olasılığı</div>
-                        </div>
-                        )}
-
-                        {/* Yangın */}
-                        {disasterRisk.yangin && (
-                        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <svg width="18" height="18" viewBox="0 0 24 24" fill={disasterRisk.yangin.risk_color} className="flex-shrink-0">
-                                <path fillRule="evenodd" clipRule="evenodd" d="M12.4803 2.76059C13.2315 2.30898 14.208 2.28697 15.0418 2.88997C17.7027 4.81436 20.75 8.2447 20.75 13.1111C20.75 16.9175 19.1146 19.3652 17.0325 20.835C15.7533 21.738 14.3232 22.2609 13.0331 22.5258C12.5577 22.6872 12.1 22.75 11.7333 22.75C11.6306 22.75 11.521 22.746 11.4058 22.7374C11.242 22.746 11.0843 22.75 10.9333 22.75C9.47245 22.75 7.31363 22.2658 5.50409 20.806C3.6625 19.3203 2.25 16.8771 2.25 13.1111C2.25 10.0344 3.87536 7.9652 5.40507 6.79826C6.04192 6.31244 6.80509 6.30435 7.40898 6.63407C7.99302 6.95295 8.40231 7.56762 8.47627 8.28958L8.5621 9.12741C8.59508 9.44943 8.75974 9.71671 8.93177 9.84683C9.0125 9.90789 9.07802 9.92706 9.12163 9.93034C9.15843 9.93311 9.21562 9.92815 9.30063 9.8729C9.95369 9.44849 10.4496 8.68506 10.7833 7.78664C11.1138 6.89653 11.25 5.96663 11.25 5.33336V5.00973C11.25 4.03696 11.7444 3.20294 12.4803 2.76059ZM15.5176 20.0225C15.7384 19.8964 15.9557 19.759 16.1675 19.6095C17.8631 18.4126 19.25 16.4159 19.25 13.1111C19.25 8.92389 16.6279 5.88822 14.1627 4.10543C13.838 3.8706 13.5133 3.88975 13.2531 4.04619C12.9775 4.21188 12.75 4.5528 12.75 5.00973V5.33336C12.75 6.14196 12.5831 7.24891 12.1894 8.30886C11.7988 9.3605 11.1494 10.4604 10.118 11.1306C9.38388 11.6077 8.59212 11.4706 8.02694 11.0432C7.49344 10.6397 7.14144 9.97856 7.0699 9.28027L6.98408 8.44244C6.95826 8.19039 6.82167 8.02241 6.69016 7.95061C6.5785 7.88965 6.45645 7.88284 6.31484 7.99087C5.04758 8.9576 3.75 10.6247 3.75 13.1111C3.75 16.4562 4.98195 18.4575 6.44591 19.6385C6.84345 19.9592 7.263 20.2233 7.68701 20.4381C7.41384 19.8888 7.25 19.2282 7.25 18.4445C7.25 16.341 8.57017 14.8717 9.69806 14.0521C10.2109 13.6795 10.8273 13.6907 11.2979 13.9755C11.7522 14.2504 12.0441 14.7589 12.0441 15.3334C12.0441 15.5682 12.0448 15.8335 12.0763 16.0969C12.0815 16.14 12.0873 16.1814 12.0938 16.221C12.254 15.8525 12.5484 15.5666 12.897 15.4155C13.3152 15.2342 13.847 15.2379 14.2912 15.5719C14.9907 16.098 15.75 17.0424 15.75 18.4445C15.75 19.0383 15.666 19.5627 15.5176 20.0225Z"/>
-                              </svg>
-                              <span className="text-white text-sm font-medium">Yangın Riski</span>
-                            </div>
-                            <span className="text-sm font-bold" style={{ color: disasterRisk.yangin.risk_color }}>{disasterRisk.yangin.risk_label}</span>
-                          </div>
-                          <div className="h-2 bg-white/10 rounded-full overflow-hidden mb-3">
-                            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${disasterRisk.yangin.risk_pct}%`, background: `linear-gradient(to right, ${disasterRisk.yangin.risk_color}, ${disasterRisk.yangin.risk_color}cc)` }}></div>
-                          </div>
-                          <div className="grid grid-cols-2 gap-2">
-                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
-                              <div className="text-white/40 text-[10px] uppercase tracking-wider">FWI Max</div>
-                              <div className="text-white text-sm font-semibold">{disasterRisk.yangin.fwi_max.toFixed(1)}</div>
-                            </div>
-                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
-                              <div className="text-white/40 text-[10px] uppercase tracking-wider">FWI Ort.</div>
-                              <div className="text-white text-sm font-semibold">{disasterRisk.yangin.fwi_ortalama.toFixed(1)}</div>
-                            </div>
-                          </div>
-                          <div className="mt-2 text-white/30 text-[10px]">Kaynak: Copernicus EFFIS · Haz-Eyl 2024 dönemi</div>
-                        </div>
-                        )}
-
-                        {/* Sel/Taşkın */}
-                        {disasterRisk.sel && (
-                        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <svg width="18" height="18" viewBox="0 0 32 32" fill={disasterRisk.sel.risk_color} className="flex-shrink-0">
-                                <path d="M2.884 8.884l2.933-2.933c3.246 4.352 6.929 4.429 10.184 0.24 3.256 4.187 6.936 4.111 10.184-0.24l2.932 2.933c0.226 0.227 0.539 0.367 0.885 0.367 0.691 0 1.251-0.56 1.251-1.251 0-0.345-0.14-0.658-0.366-0.884v0l-4-4c-0.226-0.226-0.539-0.366-0.885-0.366-0.445 0-0.836 0.232-1.058 0.582l-0.003 0.005c-1.395 2.232-2.758 3.413-3.939 3.413s-2.545-1.181-3.94-3.413c-0.238-0.333-0.624-0.548-1.059-0.548s-0.822 0.215-1.057 0.545l-0.003 0.004c-1.396 2.231-2.758 3.412-3.94 3.412s-2.545-1.181-3.94-3.412c-0.199-0.316-0.529-0.534-0.912-0.579l-0.006-0.001c-0.040-0.005-0.087-0.007-0.135-0.007-0.347 0-0.662 0.14-0.891 0.366l-4 4c-0.225 0.226-0.363 0.537-0.363 0.881 0 0.69 0.56 1.25 1.25 1.25 0.344 0 0.655-0.139 0.881-0.363zM26.885 13.116c-0.226-0.226-0.539-0.366-0.884-0.366-0.445 0-0.836 0.233-1.058 0.583l-0.003 0.005c-1.395 2.232-2.758 3.413-3.939 3.413s-2.545-1.181-3.94-3.413c-0.238-0.334-0.624-0.549-1.060-0.549s-0.822 0.215-1.057 0.545l-0.003 0.004c-1.395 2.232-2.757 3.413-3.939 3.413s-2.545-1.181-3.939-3.413c-0.224-0.355-0.615-0.588-1.060-0.588-0.345 0-0.658 0.14-0.884 0.366l-4 4c-0.226 0.226-0.366 0.539-0.366 0.884 0 0.69 0.56 1.25 1.25 1.25 0.345 0 0.658-0.14 0.884-0.366l2.933-2.934c3.248 4.354 6.93 4.428 10.184 0.24 1.073 1.714 2.884 2.881 4.976 3.057l0.024 0.002c2.218-0.205 4.103-1.465 5.167-3.268l0.017-0.031 2.932 2.934c0.227 0.228 0.541 0.37 0.888 0.37 0.691 0 1.251-0.56 1.251-1.251 0-0.347-0.141-0.661-0.369-0.887zM26.885 23.115c-0.226-0.226-0.539-0.365-0.884-0.365-0.445 0-0.836 0.233-1.058 0.583l-0.003 0.005c-1.395 2.232-2.758 3.412-3.939 3.412s-2.545-1.18-3.94-3.412c-0.238-0.333-0.624-0.548-1.060-0.548s-0.822 0.215-1.057 0.544l-0.003 0.004c-1.395 2.232-2.757 3.412-3.939 3.412s-2.545-1.18-3.939-3.412c-0.225-0.355-0.616-0.588-1.061-0.588-0.345 0-0.657 0.14-0.884 0.366l-4 4c-0.227 0.226-0.367 0.539-0.367 0.885 0 0.691 0.56 1.251 1.251 1.251 0.345 0 0.658-0.14 0.884-0.366l2.933-2.934c3.248 4.352 6.93 4.426 10.184 0.24 1.073 1.714 2.884 2.881 4.976 3.057l0.024 0.002c2.218-0.205 4.103-1.465 5.167-3.268l0.017-0.031 2.932 2.934c0.226 0.226 0.539 0.366 0.884 0.366 0.691 0 1.251-0.56 1.251-1.251 0-0.345-0.14-0.658-0.366-0.884z"/>
-                              </svg>
-                              <span className="text-white text-sm font-medium">Sel/Taşkın Riski</span>
-                            </div>
-                            <span className="text-sm font-bold" style={{ color: disasterRisk.sel.risk_color }}>{disasterRisk.sel.risk_label}</span>
-                          </div>
-                          <div className="h-2 bg-white/10 rounded-full overflow-hidden mb-3">
-                            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${disasterRisk.sel.risk_pct}%`, background: `linear-gradient(to right, ${disasterRisk.sel.risk_color}, ${disasterRisk.sel.risk_color}cc)` }}></div>
-                          </div>
-                          <div className="grid grid-cols-2 gap-2">
-                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
-                              <div className="text-white/40 text-[10px] uppercase tracking-wider">Nehir Seli</div>
-                              <div className="text-white text-sm font-semibold">{disasterRisk.sel.sel_nehir}</div>
-                            </div>
-                            <div className="bg-black/20 rounded-md px-2.5 py-1.5">
-                              <div className="text-white/40 text-[10px] uppercase tracking-wider">Kentsel Sel</div>
-                              <div className="text-white text-sm font-semibold">{disasterRisk.sel.sel_kentsel}</div>
-                            </div>
-                          </div>
-                          <div className="mt-2 text-white/30 text-[10px]">Kaynak: World Bank ThinkHazard / GFDRR</div>
-                        </div>
-                        )}
-
-                        {/* Heyelan */}
-                        {disasterRisk.heyelan && (
-                        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <svg width="18" height="18" viewBox="0 0 304.428 304.428" fill={disasterRisk.heyelan.risk_color} className="flex-shrink-0">
-                                <polygon points="304.428,290.78 192.408,216.411 166.649,216.995 159.753,189.147 122.766,167.54 124.503,117.125 66.696,89.945 56.025,41.215 0,13.648 0,290.78"/>
-                                <polygon points="127.064,27.676 97.334,49.67 121.223,81.832 121.223,81.832 178.161,81.832 178.161,41.671"/>
-                                <polygon points="179.215,116.416 164.833,147.004 206.817,168.456 207.726,139.461"/>
-                                <path d="M235.93,199.49l-14.252,12.685l21.204,20.494c0.023,0.031,0.041,0.06,0.063,0.09l16.106-20.584L235.93,199.49z"/>
-                              </svg>
-                              <span className="text-white text-sm font-medium">Heyelan Riski</span>
-                            </div>
-                            <span className="text-sm font-bold" style={{ color: disasterRisk.heyelan.risk_color }}>{disasterRisk.heyelan.risk_label}</span>
-                          </div>
-                          <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-                            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${disasterRisk.heyelan.risk_pct}%`, background: `linear-gradient(to right, ${disasterRisk.heyelan.risk_color}, ${disasterRisk.heyelan.risk_color}cc)` }}></div>
-                          </div>
-                          <div className="mt-2 text-white/30 text-[10px]">Kaynak: World Bank ThinkHazard / GFDRR</div>
-                        </div>
-                        )}
-
-                        {/* Tsunami */}
-                        {disasterRisk.tsunami && (
-                        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <svg width="18" height="18" viewBox="0 0 24 24" fill={disasterRisk.tsunami.risk_color} className="flex-shrink-0">
-                                <path d="M2 16c0-2 2-4 4-4s4 2 4 4-2 4-4 4-4-2-4-4zm16 0c0-2 2-4 4-4v8c-2 0-4-2-4-4zM12 4c1.1 0 2 .9 2 2v4c0 1.1-.9 2-2 2s-2-.9-2-2V6c0-1.1.9-2 2-2zm-6 8c1.1 0 2 .9 2 2v2c0 1.1-.9 2-2 2s-2-.9-2-2v-2c0-1.1.9-2 2-2zm12-2c1.1 0 2 .9 2 2v4c0 1.1-.9 2-2 2s-2-.9-2-2v-4c0-1.1.9-2 2-2z"/>
-                              </svg>
-                              <span className="text-white text-sm font-medium">Tsunami Riski</span>
-                            </div>
-                            <span className="text-sm font-bold" style={{ color: disasterRisk.tsunami.risk_color }}>{disasterRisk.tsunami.risk_label}</span>
-                          </div>
-                          <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-                            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${disasterRisk.tsunami.risk_pct}%`, background: `linear-gradient(to right, ${disasterRisk.tsunami.risk_color}, ${disasterRisk.tsunami.risk_color}cc)` }}></div>
-                          </div>
-                          <div className="mt-2 text-white/30 text-[10px]">Kaynak: World Bank ThinkHazard / GFDRR</div>
-                        </div>
-                        )}
-
-                      </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* İllere Göre Risk Tablosu */}
-                  <div className="bg-white/5 backdrop-blur-sm border border-white/10 hover:bg-white/8 transition-all duration-200 rounded-xl p-5">
-                    <h3 className="text-white text-lg font-semibold mb-4">İllere Göre Toplam Risk Skoru</h3>
-                    
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b border-white/10">
-                            <th className="text-left text-white/60 font-medium py-3 px-2">#</th>
-                            <th className="text-left text-white/60 font-medium py-3 px-2">İl</th>
-                            <th className="text-center text-white/60 font-medium py-3 px-2">Ekonomik<br/>Risk</th>
-                            <th className="text-center text-white/60 font-medium py-3 px-2">Deprem<br/>Riski</th>
-                            <th className="text-center text-white/60 font-medium py-3 px-2">Doğal Afet<br/>Riski</th>
-                            <th className="text-center text-white/60 font-medium py-3 px-2">TOPLAM<br/>RİSK</th>
-                            <th className="text-center text-white/60 font-medium py-3 px-2">Durum</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {[
-                            { rank: 1, city: 'İstanbul', economic: 72, earthquake: 85, natural: 68, total: 75, status: 'Yüksek' },
-                            { rank: 2, city: 'İzmir', economic: 68, earthquake: 82, natural: 65, total: 72, status: 'Yüksek' },
-                            { rank: 3, city: 'Bursa', economic: 65, earthquake: 78, natural: 62, total: 68, status: 'Yüksek' },
-                            { rank: 4, city: 'Ankara', economic: 70, earthquake: 45, natural: 38, total: 51, status: 'Orta' },
-                            { rank: 5, city: 'Antalya', economic: 62, earthquake: 52, natural: 58, total: 57, status: 'Orta' },
-                            { rank: 6, city: 'Muğla', economic: 58, earthquake: 68, natural: 72, total: 66, status: 'Yüksek' },
-                            { rank: 7, city: 'Kocaeli', economic: 66, earthquake: 76, natural: 55, total: 66, status: 'Yüksek' },
-                            { rank: 8, city: 'Tekirdağ', economic: 64, earthquake: 72, natural: 52, total: 63, status: 'Orta' },
-                            { rank: 9, city: 'Balıkesir', economic: 60, earthquake: 70, natural: 60, total: 63, status: 'Orta' },
-                            { rank: 10, city: 'Aydın', economic: 59, earthquake: 75, natural: 65, total: 66, status: 'Yüksek' }
-                          ].map((item) => (
-                            <tr key={item.city} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                              <td className="py-3 px-2 text-white/40 font-mono">{item.rank}</td>
-                              <td className="py-3 px-2 text-white font-medium">{item.city}</td>
-                              <td className="py-3 px-2 text-center">
-                                <span className={`font-bold ${item.economic >= 70 ? 'text-red-400' : item.economic >= 60 ? 'text-orange-400' : 'text-yellow-400'}`}>
-                                  {item.economic}
-                                </span>
-                              </td>
-                              <td className="py-3 px-2 text-center">
-                                <span className={`font-bold ${item.earthquake >= 80 ? 'text-red-400' : item.earthquake >= 60 ? 'text-orange-400' : 'text-yellow-400'}`}>
-                                  {item.earthquake}
-                                </span>
-                              </td>
-                              <td className="py-3 px-2 text-center">
-                                <span className={`font-bold ${item.natural >= 65 ? 'text-red-400' : item.natural >= 50 ? 'text-orange-400' : 'text-yellow-400'}`}>
-                                  {item.natural}
-                                </span>
-                              </td>
-                              <td className="py-3 px-2 text-center">
-                                <div className="flex items-center justify-center gap-2">
-                                  <span className={`text-lg font-bold ${item.total >= 70 ? 'text-red-400' : item.total >= 60 ? 'text-orange-400' : 'text-yellow-400'}`}>
-                                    {item.total}
-                                  </span>
-                                </div>
-                              </td>
-                              <td className="py-3 px-2 text-center">
-                                <span className={`text-xs font-medium px-2 py-1 rounded-full ${
-                                  item.status === 'Yüksek' ? 'bg-red-500/20 text-red-400' :
-                                  item.status === 'Orta' ? 'bg-orange-500/20 text-orange-400' :
-                                  'bg-green-500/20 text-green-400'
-                                }`}>
-                                  {item.status}
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
                   </div>
     </div>
   );

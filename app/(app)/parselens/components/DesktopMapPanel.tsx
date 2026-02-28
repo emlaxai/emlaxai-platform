@@ -2,13 +2,14 @@
 'use client';
 import dynamic from 'next/dynamic';
 import Image from 'next/image';
-import ImarParcelsLayer from './ImarParcelsLayer';
 import OzelBolgelerLayer from './OzelBolgelerLayer';
 import { displayMahalleName } from '../utils/helpers';
 import TapuHeatmapLayer from './TapuHeatmapLayer';
 import { MapRefSetter, MapResizer, MapClickHandler } from './MapHelpers';
 import { geoNameToDbName, getPriceColor } from '../utils/constants';
 import ExaMarkdown from '@/components/ExaMarkdown/ExaMarkdown';
+
+const CesiumMapComponent = dynamic(() => import('./CesiumMap'), { ssr: false });
 
 const MapContainer = dynamic(
   () => import('react-leaflet').then((mod) => mod.MapContainer),
@@ -39,7 +40,7 @@ export default function DesktopMapPanel(props: Record<string, any>) {
   const {
     splitPosition, mapRef, pendingZoomRef, tileConfig, mapMode,
     illerGeoJSON, ilcelerGeoJSON, mahallelerGeoJSON,
-    selectedIl, selectedIlce, selectedIlCenter, selectedIlZoom,
+    selectedIl, selectedIlce, selectedMahalle, selectedIlCenter, selectedIlZoom,
     ilSinirlari, ilceSinirlari, mahalleSinirlari,
     ilFiyatlari, ilceFiyatlari, mahalleFiyatlari,
     priceMin, priceMax, ilcePriceMin, ilcePriceMax, mahallePriceMin, mahallePriceMax,
@@ -61,8 +62,15 @@ export default function DesktopMapPanel(props: Record<string, any>) {
     handleFiltersApply, handleImarBaskisiToggle, handleExaChatSend,
     handleChatResizeStart, handleParcelClick, handleMahalleClick, handleMapBackClick, searchAddress, chatEndRef, chatPanelHeight, exaChatMessages,
     formatNumber, getMahallePrice, getMahalleColor, getIlColor, getIlPrice, getIlceColor, getIlcePrice,
-    _mapRefCb,
+    _mapRefCb, pageMode, parselFlyTo,
   } = props;
+
+  const cesiumFlyTo = parselFlyTo
+    ? { lat: parselFlyTo.lat, lon: parselFlyTo.lon, polygon: parselFlyTo.polygon || undefined }
+    : searchPin
+      ? { lat: searchPin[0], lon: searchPin[1] }
+      : null;
+
   return (
     <>
         {/* Sağ Panel - Harita */}
@@ -70,238 +78,11 @@ export default function DesktopMapPanel(props: Record<string, any>) {
           className="absolute top-0 right-0 bottom-0 overflow-hidden transition-[width] duration-200"
           style={{ width: `${100 - splitPosition}%`, display: splitPosition === 100 ? 'none' : undefined }}
         >
-          {/* Harita Kontrol Barı */}
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 max-w-[95%]">
-            {/* Katmanlar Dropdown */}
-            <div ref={layersDropdownRef} className="relative">
-              <button 
-                onClick={() => setIsLayersDropdownOpen(!isLayersDropdownOpen)}
-                className="px-4 py-3 bg-black/80 backdrop-blur-md border border-white/20 rounded-lg text-white text-xs font-medium hover:bg-white/10 transition-all duration-200 flex items-center gap-1.5 flex-shrink-0 outline-none focus:outline-none"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-                  <polyline points="2 17 12 22 22 17"></polyline>
-                  <polyline points="2 12 12 17 22 12"></polyline>
-                </svg>
-                Katmanlar
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`transition-transform duration-200 ${isLayersDropdownOpen ? 'rotate-180' : ''}`}>
-                  <polyline points="6 9 12 15 18 9"></polyline>
-                </svg>
-              </button>
 
-              {/* Dropdown Menu */}
-              {isLayersDropdownOpen && (
-                <div className="absolute top-full mt-2 left-0 w-56 bg-black/90 backdrop-blur-xl border border-white/20 rounded-xl shadow-2xl overflow-hidden z-50"
-                     style={{ animation: 'fadeIn 0.15s ease-out' }}>
-                  {/* Talep Yoğunluğu */}
-                  <label className="flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors border-b border-white/10">
-                    <div className="relative flex-shrink-0">
-                      <input
-                        type="checkbox"
-                        checked={talepYogunlugu}
-                        onChange={(e) => setTalepYogunlugu(e.target.checked)}
-                        className="sr-only peer"
-                      />
-                      <div className="w-4 h-4 rounded-full border-2 border-white/30 peer-checked:border-blue-500 peer-checked:bg-blue-500 transition-all duration-200 flex items-center justify-center">
-                        {talepYogunlugu && (
-                          <div className="w-2 h-2 rounded-full bg-white"></div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center flex-shrink-0">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
-                        <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                    <span className="text-white text-xs font-medium">Talep Yoğunluğu</span>
-                  </label>
-
-                  {/* İmar Baskısı */}
-                  <label className={`flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors border-b border-white/10 ${!selectedIl ? 'opacity-40 pointer-events-none' : ''}`}>
-                    <div className="relative flex-shrink-0">
-                      <input
-                        type="checkbox"
-                        checked={imarBaskisi}
-                        onChange={(e) => handleImarBaskisiToggle(e.target.checked)}
-                        className="sr-only peer"
-                        disabled={!selectedIl}
-                      />
-                      <div className="w-4 h-4 rounded-full border-2 border-white/30 peer-checked:border-amber-500 peer-checked:bg-amber-500 transition-all duration-200 flex items-center justify-center">
-                        {imarBaskisi && (
-                          <div className="w-2 h-2 rounded-full bg-white"></div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-amber-500 to-red-500 flex items-center justify-center flex-shrink-0">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
-                        <path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                    <div className="flex flex-col">
-                      <span className="text-white text-xs font-medium">İmar Baskısı</span>
-                      {!selectedIl && <span className="text-white/30 text-[9px]">Önce bir il seçin</span>}
-                    </div>
-                  </label>
-
-                  {/* İl Sınırları */}
-                  <label className={`flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors border-b border-white/10 ${imarBaskisi ? 'opacity-30 pointer-events-none' : ''}`}>
-                    <div className="relative flex-shrink-0">
-                      <input
-                        type="checkbox"
-                        checked={ilSinirlari}
-                        onChange={(e) => setIlSinirlari(e.target.checked)}
-                        className="sr-only peer"
-                        disabled={imarBaskisi}
-                      />
-                      <div className="w-4 h-4 rounded-full border-2 border-white/30 peer-checked:border-blue-500 peer-checked:bg-blue-500 transition-all duration-200 flex items-center justify-center">
-                        {ilSinirlari && (
-                          <div className="w-2 h-2 rounded-full bg-white"></div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center flex-shrink-0">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
-                        <path d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                    <span className="text-white text-xs font-medium">İl Sınırları</span>
-                    {imarBaskisi && <span className="text-amber-400/60 text-[9px] ml-auto">İmar modu aktif</span>}
-                  </label>
-
-                  {/* İlçe Sınırları */}
-                  <label className={`flex items-center gap-3 px-4 py-3 hover:bg-white/10 cursor-pointer transition-colors ${imarBaskisi ? 'opacity-30 pointer-events-none' : ''}`}>
-                    <div className="relative flex-shrink-0">
-                      <input
-                        type="checkbox"
-                        checked={ilceSinirlari}
-                        onChange={(e) => setIlceSinirlari(e.target.checked)}
-                        className="sr-only peer"
-                        disabled={imarBaskisi}
-                      />
-                      <div className="w-4 h-4 rounded-full border-2 border-white/30 peer-checked:border-blue-500 peer-checked:bg-blue-500 transition-all duration-200 flex items-center justify-center">
-                        {ilceSinirlari && (
-                          <div className="w-2 h-2 rounded-full bg-white"></div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-500 flex items-center justify-center flex-shrink-0">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
-                        <rect x="3" y="3" width="7" height="7" strokeLinecap="round" strokeLinejoin="round"/>
-                        <rect x="14" y="3" width="7" height="7" strokeLinecap="round" strokeLinejoin="round"/>
-                        <rect x="3" y="14" width="7" height="7" strokeLinecap="round" strokeLinejoin="round"/>
-                        <rect x="14" y="14" width="7" height="7" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                    <span className="text-white text-xs font-medium">İlçe Sınırları</span>
-                    {imarBaskisi && <span className="text-amber-400/60 text-[9px] ml-auto">İmar modu aktif</span>}
-                  </label>
-                </div>
-              )}
-            </div>
-            
-            {/* Adres Arama Barı */}
-            <div ref={searchContainerRef} className="relative flex-1 min-w-[200px] max-w-[320px]">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => handleSearchInput(e.target.value)}
-                onFocus={() => { if (searchResults.length > 0) setShowSearchResults(true); }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && searchQuery.length >= 2) {
-                    searchAddress(searchQuery);
-                  }
-                  if (e.key === 'Escape') setShowSearchResults(false);
-                }}
-                placeholder="İl, ilçe, mahalle veya ada/parsel ara..."
-                className="w-full pl-4 pr-9 py-3 bg-black/80 backdrop-blur-md border border-white/20 rounded-lg text-white text-xs placeholder-white/40 focus:outline-none focus:border-white/40 transition-all duration-200"
-              />
-              {searchLoading ? (
-                <div className="absolute right-2.5 top-1/2 -translate-y-1/2">
-                  <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
-                </div>
-              ) : (
-                <button 
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 hover:bg-white/10 rounded-md transition-colors"
-                  title="Ara"
-                  onClick={() => { if (searchQuery.length >= 2) searchAddress(searchQuery); }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/60 hover:text-white">
-                    <circle cx="11" cy="11" r="8"></circle>
-                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                  </svg>
-                </button>
-              )}
-
-              {/* Arama Sonuçları Dropdown - Google Style */}
-              {showSearchResults && searchResults.length > 0 && (
-                <div className="absolute top-full mt-1 left-0 right-0 bg-zinc-900/98 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl z-[999] overflow-hidden max-h-[380px] overflow-y-auto py-1"
-                     style={{ animation: 'fadeIn 0.12s ease-out' }}>
-                  {searchResults.map((result: any, i: number) => {
-                    if (result.source === 'backend') {
-                      const typeLabel = result.type === 'parsel' ? 'Parsel' : result.type === 'mahalle' ? 'Mahalle' : result.type === 'ilce' ? 'İlçe' : 'İl';
-                      return (
-                        <button key={`b-${i}`} onClick={() => handleSearchSelect(result)}
-                          className="w-full flex items-center gap-2.5 px-3.5 py-2 hover:bg-white/[0.06] transition-colors text-left outline-none focus:outline-none group">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-white/25 group-hover:text-white/40 flex-shrink-0 transition-colors">
-                            {result.type === 'parsel' ? (
-                              <><rect x="3" y="3" width="18" height="18" rx="2" strokeLinecap="round"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="12" y1="3" x2="12" y2="21"/></>
-                            ) : (
-                              <><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" strokeLinecap="round" strokeLinejoin="round"/><circle cx="12" cy="10" r="3"/></>
-                            )}
-                          </svg>
-                          <div className="flex-1 min-w-0">
-                            <span className="text-white/90 text-[13px] truncate block">{result.display}</span>
-                            {result.type === 'parsel' && result.subtitle && (
-                              <span className="text-white/30 text-[10px] truncate block">{result.subtitle}</span>
-                            )}
-                          </div>
-                          <span className="flex-shrink-0 text-[10px] text-white/20 font-medium">{typeLabel}</span>
-                        </button>
-                      );
-                    }
-                    // Nominatim fallback
-                    const parts = (result.display_name || '').split(',');
-                    const title = parts[0]?.trim() || '';
-                    const subtitle = parts.slice(1, 3).join(',').trim();
-                    return (
-                      <button key={`n-${i}`} onClick={() => handleSearchSelect(result)}
-                        className="w-full flex items-center gap-2.5 px-3.5 py-2 hover:bg-white/[0.06] transition-colors text-left outline-none focus:outline-none group">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-white/25 group-hover:text-white/40 flex-shrink-0 transition-colors">
-                          <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" strokeLinecap="round" strokeLinejoin="round"/>
-                          <circle cx="12" cy="10" r="3"/>
-                        </svg>
-                        <div className="flex-1 min-w-0">
-                          <span className="text-white/90 text-[13px] truncate block">{title}</span>
-                          <span className="text-white/30 text-[10px] truncate block">{subtitle}</span>
-                        </div>
-                        <span className="flex-shrink-0 text-[10px] text-white/20 font-medium">Adres</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-            
-            {/* Filtreler Butonu */}
-            <button 
-              onClick={() => setIsFilterOpen(true)}
-              className={`px-4 py-3 backdrop-blur-md border rounded-lg text-white text-xs font-medium hover:bg-white/10 transition-all duration-200 flex items-center gap-1.5 flex-shrink-0 outline-none focus:outline-none ${
-                trendKategori !== 'konut' 
-                  ? 'bg-blue-600/80 border-blue-400/40' 
-                  : 'bg-black/80 border-white/20'
-              }`}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
-                <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
-              </svg>
-              {trendKategori === 'konut' ? 'Filtreler' : propertyType}
-            </button>
-          </div>
-
-          {/* Breadcrumb Navigasyon */}
-          {selectedIl && (
+          {/* Breadcrumb Navigasyon - Bölgelens modunda */}
+          {selectedIl && pageMode !== 'imar' && (
             <div 
-              className="absolute top-[60px] left-1/2 -translate-x-1/2 z-[1000]"
+              className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000]"
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
             >
@@ -448,6 +229,9 @@ export default function DesktopMapPanel(props: Record<string, any>) {
               border-right-color: rgba(10, 10, 10, 0.92) !important;
             }
           `}</style>
+          {mapMode === '3d' ? (
+            <CesiumMapComponent flyTo={cesiumFlyTo} />
+          ) : (
           <MapContainer
             center={[39.0, 35.0]} // Türkiye merkez koordinatları
             zoom={6}
@@ -615,12 +399,35 @@ export default function DesktopMapPanel(props: Record<string, any>) {
             )}
 
             {/* Mahalle Sınırları Katmanı - Fiyata göre renklendirilmiş */}
-            {mahalleSinirlari && mahallelerGeoJSON && selectedIlce && (
+            {mahalleSinirlari && mahallelerGeoJSON && selectedIlce && (() => {
+              const normMahalle = (s: string) => s.toLowerCase()
+                .replace(/ı/g,'i').replace(/ö/g,'o').replace(/ü/g,'u').replace(/ş/g,'s').replace(/ç/g,'c').replace(/ğ/g,'g')
+                .replace(/\s*\(.*?\)\s*/g, '')
+                .replace(/(mahallesi|mah\.|koyu|koy\.|mh\.)/gi, '')
+                .replace(/[^a-z0-9]/g, '').trim();
+              const matchesMahalle = (geoAd: string, selected: string) => {
+                if (geoAd === selected) return true;
+                return normMahalle(geoAd) === normMahalle(selected);
+              };
+              const filteredData = selectedMahalle ? {
+                ...mahallelerGeoJSON,
+                features: mahallelerGeoJSON.features.filter((f: any) => matchesMahalle(f.properties?.ad || '', selectedMahalle))
+              } : mahallelerGeoJSON;
+              return (
               <GeoJSON
-                key={`mahalle-sinirlari-${selectedIl}-${selectedIlce}-${mahalleFiyatlari ? 'loaded' : 'default'}`}
-                data={mahallelerGeoJSON}
+                key={`mahalle-sinirlari-${selectedIl}-${selectedIlce}-${selectedMahalle || 'all'}-${mahalleFiyatlari ? 'loaded' : 'default'}`}
+                data={filteredData}
                 style={(feature) => {
                   const mahalleAdi = feature?.properties?.ad || '';
+                  if (selectedMahalle) {
+                    return {
+                      color: '#3b82f6',
+                      weight: 3,
+                      opacity: 1,
+                      fillColor: 'transparent',
+                      fillOpacity: 0,
+                    };
+                  }
                   const color = getMahalleColor(mahalleAdi);
                   return {
                     color: 'rgba(255,255,255,0.4)',
@@ -673,10 +480,8 @@ export default function DesktopMapPanel(props: Record<string, any>) {
                   }
                 }}
               />
-            )}
-
-            {/* İmar Baskısı - Parsel Katmanı (Viewport-based GeoJSON) */}
-            <ImarParcelsLayer il={selectedIl || ''} active={imarBaskisi && !!selectedIl} onParcelClick={handleParcelClick} />
+              );
+            })()}
 
             {/* Özel Bölge Sınırları (OSB, Havalimanı, vb.) */}
             <OzelBolgelerLayer active={imarBaskisi && !!selectedIl} />
@@ -684,128 +489,41 @@ export default function DesktopMapPanel(props: Record<string, any>) {
             {/* TKGM Tapu İşlem Hacmi Heatmap */}
             <TapuHeatmapLayer il={selectedIl || ''} active={talepYogunlugu} />
           </MapContainer>
-
-          {/* 1/1000 İmar Planı Lejantı - Sol Alt */}
-          {imarBaskisi && (
-            <div
-              className="absolute bottom-[104px] right-4 z-20 rounded-lg overflow-hidden"
-              style={{
-                background: 'rgba(0,0,0,0.85)',
-                backdropFilter: 'blur(12px)',
-                WebkitBackdropFilter: 'blur(12px)',
-                border: '1px solid rgba(255,255,255,0.15)',
-                maxHeight: '320px',
-                width: '180px',
-              }}
-            >
-              <div className="px-3 py-2 border-b border-white/10">
-                <div className="flex items-center gap-1.5">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
-                  <span className="text-[10px] font-bold text-white/80 tracking-wider">1/1000 PLAN LEJANTI</span>
-                </div>
-              </div>
-              <div className="px-3 py-2 flex flex-col gap-1.5" style={{ overflowY: 'auto', maxHeight: '270px' }}>
-                {[
-                  { color: '#6B3410', label: 'Konut Alanı' },
-                  { color: '#FFD700', label: 'İmar Potansiyel Alanı' },
-                  { color: '#DC143C', label: 'Ticari Alan' },
-                  { color: '#800080', label: 'Sanayi / OSB' },
-                  { color: '#4DA6FF', label: 'Kamusal Alan' },
-                  { color: '#228B22', label: 'Tarım Alanı' },
-                  { color: '#708090', label: 'Yol / Altyapı' },
-                  { color: '#FF6347', label: 'Sit Alanı' },
-                ].map(({ color, label }) => (
-                  <div key={label} className="flex items-center gap-2">
-                    <span
-                      className="flex-shrink-0"
-                      style={{
-                        width: 16, height: 12, borderRadius: 2,
-                        background: `repeating-linear-gradient(45deg, ${color}, ${color} 2px, rgba(0,0,0,0.25) 2px, rgba(0,0,0,0.25) 4px)`,
-                        border: `1px solid ${color}88`,
-                      }}
-                    />
-                    <span className="text-[9px] text-white/70">{label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
           )}
 
-          {/* Harita Modu Toggle - Sağ Üst Dikey */}
-          <div className="absolute top-4 right-4 z-20 flex flex-col bg-black/80 backdrop-blur-md border border-white/20 rounded-lg overflow-hidden" style={{ minWidth: '78px' }}>
-            <button
-              onClick={() => setMapMode('dark')}
-              className={`px-2.5 py-2 text-[11px] font-medium transition-all duration-200 flex items-center gap-1.5 outline-none focus:outline-none ${
-                mapMode === 'dark' ? 'bg-white/20 text-white' : 'text-white/50 hover:text-white/80 hover:bg-white/5'
-              }`}
-              title="Koyu Harita"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-              </svg>
-              Koyu
-            </button>
-            <button
-              onClick={() => setMapMode('satellite')}
-              className={`px-2.5 py-2 text-[11px] font-medium transition-all duration-200 flex items-center gap-1.5 outline-none focus:outline-none border-t border-white/10 ${
-                mapMode === 'satellite' ? 'bg-white/20 text-white' : 'text-white/50 hover:text-white/80 hover:bg-white/5'
-              }`}
-              title="Uydu Görünümü"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10"></circle>
-                <line x1="2" y1="12" x2="22" y2="12"></line>
-                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-              </svg>
-              Uydu
-            </button>
-            <button
-              onClick={() => setMapMode('hybrid')}
-              className={`px-2.5 py-2 text-[11px] font-medium transition-all duration-200 flex items-center gap-1.5 outline-none focus:outline-none border-t border-white/10 ${
-                mapMode === 'hybrid' ? 'bg-white/20 text-white' : 'text-white/50 hover:text-white/80 hover:bg-white/5'
-              }`}
-              title="Hibrit (Uydu + Yollar)"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                <line x1="3" y1="9" x2="21" y2="9"></line>
-                <line x1="9" y1="21" x2="9" y2="9"></line>
-              </svg>
-              Hibrit
-            </button>
-          </div>
 
-          {/* Exa Hızlı Analiz Butonu - Ayrı */}
+
+          {/* Exa Hızlı Analiz Butonu */}
           <button
             onClick={() => setIsExaChatOpen(!isExaChatOpen)}
-            className="absolute z-20 py-2 text-[11px] font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 outline-none focus:outline-none text-white rounded-lg"
+            className="absolute z-20 flex items-center justify-center outline-none focus:outline-none"
             style={{
-              top: '132px',
+              bottom: '16px',
               right: '16px',
-              left: 'auto',
-              minWidth: '78px',
-              background: 'linear-gradient(135deg, #6366f1, #8b5cf6, #a855f7, #ec4899)',
-              backdropFilter: 'blur(12px)',
-              border: '1px solid rgba(255,255,255,0.15)',
-              boxShadow: '0 4px 12px rgba(99,102,241,0.3)',
+              width: '44px',
+              height: '44px',
+              borderRadius: '50%',
+              background: 'linear-gradient(135deg, #2563eb, #7c3aed, #0ea5e9, #f59e0b)',
+              border: '1px solid rgba(255,255,255,0.2)',
+              boxShadow: '0 4px 16px rgba(37,99,235,0.4), 0 0 12px rgba(124,58,237,0.15)',
+              transition: 'all 0.2s',
             }}
             title="Exa Hızlı Analiz"
           >
             <Image
               src="/icons/emlaxai-icon.svg"
               alt="Exa"
-              width={20}
-              height={20}
+              width={22}
+              height={22}
               style={{ objectFit: 'contain' }}
             />
-            <span>Exa</span>
           </button>
           
           {/* Fiyat Skalası / İmar Bilgi Barı */}
           <div
             className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-stretch gap-3"
           >
-            {talepYogunlugu ? (
+            {pageMode === 'imar' ? null : talepYogunlugu ? (
               /* Talep Yoğunluğu Heatmap Modu */
               <div 
                 className="rounded-lg px-4 py-2 w-[400px]"
@@ -844,44 +562,6 @@ export default function DesktopMapPanel(props: Record<string, any>) {
                   <span className="text-white/40 text-[9px] whitespace-nowrap">Yoğun</span>
                 </div>
                 <div className="text-white/30 text-[8px] mt-1 text-center">TKGM tapu işlem hacmi yoğunluğu • Kaynak: Tapu ve Kadastro Genel Müdürlüğü</div>
-              </div>
-            ) : imarBaskisi && selectedIl ? (
-              /* İmar Modu Aktif - Baskı Legend */
-              <div 
-                className="rounded-lg px-4 py-2 w-[400px]"
-                style={{
-                  background: 'linear-gradient(135deg, rgba(245,158,11,0.12), rgba(239,68,68,0.12))',
-                  backdropFilter: 'blur(16px)',
-                  WebkitBackdropFilter: 'blur(16px)',
-                  border: '1px solid rgba(245,158,11,0.25)',
-                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)'
-                }}
-              >
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="flex items-center gap-2">
-                    <img src="/icons/map-point-rotate.svg" alt="İmar" className="w-5 h-5 flex-shrink-0" style={{ filter: 'brightness(0) invert(1)' }} />
-                    <span className="text-amber-300 text-[10px] font-semibold">{selectedIl} - İmar Baskısı Analizi</span>
-                  </div>
-                  <button
-                    onClick={() => handleImarBaskisiToggle(false)}
-                    className="flex-shrink-0 p-1 rounded-md hover:bg-white/10 transition-colors"
-                    title="İmar modunu kapat"
-                  >
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="18" y1="6" x2="6" y2="18"></line>
-                      <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                  </button>
-                </div>
-                {/* Baskı Renk Skalası */}
-                <div className="flex items-center gap-1.5">
-                  <span className="text-white/40 text-[9px] whitespace-nowrap">Düşük</span>
-                  <div className="flex-1 h-2 rounded-full overflow-hidden" style={{
-                    background: 'linear-gradient(to right, #22c55e, #84cc16, #eab308, #f59e0b, #f97316, #ef4444)'
-                  }} />
-                  <span className="text-white/40 text-[9px] whitespace-nowrap">Yüksek</span>
-                </div>
-                <div className="text-white/30 text-[8px] mt-1 text-center">Tarla/Ham Toprak parsellerdeki imar baskısı • Zoom 14+ yakınlaştırın</div>
               </div>
             ) : (
               /* Normal Mod - Fiyat Skalası */
@@ -957,51 +637,14 @@ export default function DesktopMapPanel(props: Record<string, any>) {
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-1">
-                  {/* Küçült */}
-                  <button
-                    onClick={() => setChatPanelHeight(30)}
-                    title="Küçük"
-                    className={`p-1.5 rounded-lg transition-colors ${chatPanelHeight <= 35 ? 'bg-white/10 text-white' : 'text-white/40 hover:bg-white/10 hover:text-white/70'}`}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="7 13 12 18 17 13"></polyline>
-                      <line x1="12" y1="2" x2="12" y2="18"></line>
-                    </svg>
-                  </button>
-                  {/* Orta */}
-                  <button
-                    onClick={() => setChatPanelHeight(55)}
-                    title="Orta"
-                    className={`p-1.5 rounded-lg transition-colors ${chatPanelHeight > 35 && chatPanelHeight < 75 ? 'bg-white/10 text-white' : 'text-white/40 hover:bg-white/10 hover:text-white/70'}`}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="7" width="18" height="10" rx="2"></rect>
-                    </svg>
-                  </button>
-                  {/* Tam ekran */}
-                  <button
-                    onClick={() => setChatPanelHeight(88)}
-                    title="Tam ekran"
-                    className={`p-1.5 rounded-lg transition-colors ${chatPanelHeight >= 75 ? 'bg-white/10 text-white' : 'text-white/40 hover:bg-white/10 hover:text-white/70'}`}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="15 3 21 3 21 9"></polyline>
-                      <polyline points="9 21 3 21 3 15"></polyline>
-                      <line x1="21" y1="3" x2="14" y2="10"></line>
-                      <line x1="3" y1="21" x2="10" y2="14"></line>
-                    </svg>
-                  </button>
-                  {/* Ayırıcı */}
-                  <div className="w-px h-4 bg-white/10 mx-1" />
-                  {/* Kapat */}
+                <div className="flex items-center">
                   <button 
                     onClick={() => setIsExaChatOpen(false)}
                     title="Kapat"
-                    className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-white/40 hover:text-white"
+                    className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/50 hover:text-white"
                   >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="6 15 12 9 18 15"></polyline>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="6 9 12 15 18 9" />
                     </svg>
                   </button>
                 </div>

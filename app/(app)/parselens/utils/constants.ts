@@ -1,4 +1,3 @@
-// @ts-nocheck
 // GeoJSON NAME_1 → DB il ismi eşleştirme
 export const GEOJSON_TO_DB_NAME: Record<string, string> = {
   'Afyon': 'Afyonkarahisar',
@@ -91,6 +90,13 @@ export interface ParselDetail {
     otobus: { name: string; distance_m: number } | null;
     sanayi: { name: string; distance_m: number } | null;
     havalimani: { name: string; distance_m: number } | null;
+  };
+  arazi_egimi?: {
+    egim_pct: number;
+    egim_derece: number;
+    min_rakım: number;
+    max_rakım: number;
+    seviye: string;
   };
   fiyat_tahmini?: {
     tahmini_m2: number;

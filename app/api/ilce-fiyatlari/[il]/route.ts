@@ -1,21 +1,26 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { backendJSON } from '@/lib/backend';
+import { rateLimit } from '@/lib/rate-limit';
 
 export async function GET(
-  request: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ il: string }> }
 ) {
-  const { il } = await params;
-  const { searchParams } = new URL(request.url);
-  const kategori = searchParams.get('kategori') || 'konut';
-  
-  const { data, error, status } = await backendJSON(
-    `/api/v1/ilce-fiyatlari/${encodeURIComponent(il)}?kategori=${encodeURIComponent(kategori)}`
-  );
-  
-  if (error) {
-    return NextResponse.json({ error }, { status });
+  const ip = request.headers.get('x-forwarded-for')?.split(',')[0] || 'unknown';
+  const rl = rateLimit(`${ip}:ilce-fiyatlari`, { windowMs: 60_000, maxRequests: 30 });
+  if (!rl.allowed) {
+    return NextResponse.json({ error: 'Rate limit' }, { status: 429 });
   }
-  
-  return NextResponse.json(data);
+
+  const { il } = await params;
+  const kat = new URL(request.url).searchParams.get('kategori') || 'konut';
+
+  const { data, error, status } = await backendJSON(
+    `/api/v1/ilce-fiyatlari/${encodeURIComponent(il)}?kategori=${encodeURIComponent(kat)}`
+  );
+
+  if (error) return NextResponse.json({ error }, { status });
+  return NextResponse.json(data, {
+    headers: { 'Cache-Control': 'public, s-maxage=1800, stale-while-revalidate=3600' },
+  });
 }

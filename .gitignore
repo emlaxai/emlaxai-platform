@@ -34,6 +34,9 @@ yarn-error.log*
 # data (large SQLite files)
 /data/*.db
 
+# cesium (loaded from CDN, not needed locally)
+/public/cesium/
+
 # vercel
 .vercel
 

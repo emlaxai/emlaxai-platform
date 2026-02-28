@@ -5,7 +5,7 @@
  * Browser bu dosyayı asla görmez.
  */
 
-const BACKEND_URL = process.env.EMLAXAI_API_URL || 'http://34.6.58.78:8000';
+const BACKEND_URL = process.env.EMLAXAI_API_URL || 'http://34.7.72.39:8000';
 const API_KEY = process.env.EMLAXAI_API_KEY || '';
 
 export async function backendFetch(path: string, options?: RequestInit): Promise<Response> {
